@@ -2,6 +2,8 @@ export const ANSI = Object.freeze({
   reset: "\u001b[0m",
   bold: "\u001b[1m",
   dim: "\u001b[2m",
+  underline: "\u001b[4m",
+  underlineOff: "\u001b[24m",
   // CodeBurn-inspired terminal palette: violet carries structure, orange
   // carries focus and activity. 256-color escapes work in Terminal.app,
   // iTerm2, and modern CI TTYs without requiring a background color.
@@ -70,6 +72,34 @@ export function themeOut(value: string, enabled: boolean): string {
 
 export function themeCache(value: string, enabled: boolean): string {
   return paint(value, ANSI.green, enabled);
+}
+
+function paintUnderline(value: string, code: string, enabled: boolean): string {
+  return enabled ? ANSI.underline + code + value + ANSI.reset : value;
+}
+
+export function underline(value: string, enabled: boolean): string {
+  return paint(value, ANSI.underline, enabled);
+}
+
+export function themeInUnderline(value: string, enabled: boolean): string {
+  return paintUnderline(value, ANSI.cyan, enabled);
+}
+
+export function themeOutUnderline(value: string, enabled: boolean): string {
+  return paintUnderline(value, ANSI.orange, enabled);
+}
+
+export function themeCacheUnderline(value: string, enabled: boolean): string {
+  return paintUnderline(value, ANSI.green, enabled);
+}
+
+export function themeCost(value: string, enabled: boolean): string {
+  return paint(value, ANSI.yellow, enabled);
+}
+
+export function themeYellow(value: string, enabled: boolean): string {
+  return paint(value, ANSI.yellow, enabled);
 }
 
 export function statusColor(

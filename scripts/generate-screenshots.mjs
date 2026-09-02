@@ -154,24 +154,29 @@ function parseAnsiLine(line) {
   let lastIdx = 0;
   let curColor = null;
   let curBold = false;
+  let curUnderline = false;
   let match;
   while ((match = regex.exec(stripped)) !== null) {
     const start = match.index;
     if (start > lastIdx) {
       const text = stripped.slice(lastIdx, start);
-      if (text) segs.push({ text, color: curColor, bold: curBold });
+      if (text) segs.push({ text, color: curColor, bold: curBold, underline: curUnderline });
     }
     const code = match[1] || "0";
     const parts = code.split(";");
     if (parts.includes("0")) {
       curColor = null;
       curBold = false;
+      curUnderline = false;
     }
     if (parts.includes("1")) curBold = true;
     if (parts.includes("2")) {
       // dim — treat as muted
       curColor = PALETTE.purpleDim;
     }
+    if (parts.includes("4")) curUnderline = true;
+    if (parts.includes("24")) curUnderline = false;
+    if (parts.includes("22")) curBold = false;
     // check for 38;5;N
     for (let i = 0; i < parts.length; i++) {
       if (parts[i] === "38" && parts[i + 1] === "5" && parts[i + 2] !== undefined) {
@@ -193,12 +198,12 @@ function parseAnsiLine(line) {
   }
   if (lastIdx < stripped.length) {
     const text = stripped.slice(lastIdx);
-    if (text) segs.push({ text, color: curColor, bold: curBold });
+    if (text) segs.push({ text, color: curColor, bold: curBold, underline: curUnderline });
   }
   // If no segments, return plain
   if (segs.length === 0 && stripped.length > 0) {
     // Should not happen because we sliced, but fallback
-    segs.push({ text: stripped, color: null, bold: false });
+    segs.push({ text: stripped, color: null, bold: false, underline: false });
   }
   return segs;
 }
@@ -291,12 +296,13 @@ function renderTextToSvg(text, opts = {}) {
       if (seg.text.length === 0) continue;
       const fill = seg.color ?? "#d9d2f0"; // default terminal fg
       const weight = seg.bold ? ' font-weight="700"' : "";
+      const deco = seg.underline ? ' text-decoration="underline"' : "";
       const esc = escapeXml(seg.text);
       if (first) {
-        svg += `<tspan x="${textStartX}" y="${y}" fill="${fill}"${weight}>${esc}</tspan>`;
+        svg += `<tspan x="${textStartX}" y="${y}" fill="${fill}"${weight}${deco}>${esc}</tspan>`;
         first = false;
       } else {
-        svg += `<tspan fill="${fill}"${weight}>${esc}</tspan>`;
+        svg += `<tspan fill="${fill}"${weight}${deco}>${esc}</tspan>`;
       }
     }
     svg += `\n`;

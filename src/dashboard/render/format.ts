@@ -141,7 +141,7 @@ export function formatTokenBreakdown(totals: {
     `I ${formatTokenCount(totals.input)}`,
     `O ${formatTokenCount(out)}`,
     `C ${formatTokenCount(cache)}`,
-  ].join("  ");
+  ].join("    ");
 }
 
 export function formatNextRefresh(
@@ -154,4 +154,27 @@ export function formatNextRefresh(
   return target.getTime() <= current.getTime()
     ? "Refreshing…"
     : `Next ${formatDuration(target.getTime() - current.getTime())}`;
+}
+
+export function formatCost(value: number | undefined | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value) || value < 0) return "—";
+  if (value === 0) return "$0.00";
+  if (value < 0.01) {
+    // Show 4 decimals for tiny costs, trim trailing zeros but keep at least 2
+    const fixed = value.toFixed(4);
+    // Remove trailing zeros beyond 2 decimals for readability but keep precision
+    const trimmed = fixed.replace(/0+$/, "").replace(/\.$/, "");
+    const decimals = trimmed.split(".")[1]?.length ?? 0;
+    if (decimals < 2) return `$${value.toFixed(2)}`;
+    return `$${trimmed}`;
+  }
+  if (value >= 1000) {
+    return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return `$${value.toFixed(2)}`;
+}
+
+export function formatCostCompact(value: number | undefined | null): string {
+  // Alias for table/dashboard where width matters — same as formatCost but without extra locale commas for <1k
+  return formatCost(value);
 }

@@ -9,10 +9,13 @@ import {
   statusColor,
   type AnsiOptions,
   themeCache,
+  themeCacheUnderline,
   themeCyan,
   themeIn,
+  themeInUnderline,
   themeOrange,
   themeOut,
+  themeOutUnderline,
   themePurple,
 } from "./ansi.js";
 import {
@@ -50,27 +53,38 @@ function truncate(value: string, width: number): string {
   return lineWidth(safe) <= width ? safe : [...safe].slice(0, Math.max(0, width - 1)).join("") + "…";
 }
 
-function colorizeBreakdown(value: string, enabled: boolean): string {
+function truncateExact(value: string, width: number): string {
+  // Like truncate but preserves multiple spaces — for trusted breakdown strings
+  // where "    " spacing must not be collapsed to " ".
+  const len = [...value].length;
+  if (len <= width) return value;
+  return [...value].slice(0, Math.max(0, width - 1)).join("") + "…";
+}
+
+function colorizeBreakdown(value: string, enabled: boolean, underline = false): string {
   if (!enabled || value.length === 0) return value;
   // Breakdown arrives as single-space separated tokens like "I 100 O 20 C 0"
   // (legacy "In 100 Out 23 Cache 9" is also handled for back-compat)
+  const inFn = underline ? themeInUnderline : themeIn;
+  const outFn = underline ? themeOutUnderline : themeOut;
+  const cacheFn = underline ? themeCacheUnderline : themeCache;
   let result = value;
   if (/\bI\s+[^\s]+/.test(result)) {
-    result = result.replace(/\bI\s+[^\s]+/, (match) => themeIn(match, enabled));
+    result = result.replace(/\bI\s+[^\s]+/, (match) => inFn(match, enabled));
   } else {
-    result = result.replace(/\bIn\s+[^\s]+/, (match) => themeIn(match, enabled));
+    result = result.replace(/\bIn\s+[^\s]+/, (match) => inFn(match, enabled));
   }
   if (/\bO\s+[^\s]+/.test(result)) {
-    result = result.replace(/\bO\s+[^\s]+/, (match) => themeOut(match, enabled));
+    result = result.replace(/\bO\s+[^\s]+/, (match) => outFn(match, enabled));
   } else {
-    result = result.replace(/\bOut\s+[^\s]+/, (match) => themeOut(match, enabled));
+    result = result.replace(/\bOut\s+[^\s]+/, (match) => outFn(match, enabled));
   }
   const hasShortCache = /\bC\s+[^\s]+/.test(result);
   const hasLongCache = /\bCache\s+[^\s]+/.test(result);
   if (hasShortCache) {
-    result = result.replace(/\bC\s+[^\s]+/, (match) => themeCache(match, enabled));
+    result = result.replace(/\bC\s+[^\s]+/, (match) => cacheFn(match, enabled));
   } else if (hasLongCache) {
-    result = result.replace(/\bCache\s+[^\s]+/, (match) => themeCache(match, enabled));
+    result = result.replace(/\bCache\s+[^\s]+/, (match) => cacheFn(match, enabled));
   } else if (result.includes("C")) {
     // Truncated cache token (e.g. "I 100 O 20 C" or "Ca…")
     const idxC = result.lastIndexOf(" C");
@@ -80,11 +94,11 @@ function colorizeBreakdown(value: string, enabled: boolean): string {
       const before = result.slice(0, index);
       const tail = result.slice(index);
       if (!tail.includes(ANSI.cyan) && !tail.includes(ANSI.orange) && !tail.includes(ANSI.green)) {
-        result = before + themeCache(tail, enabled);
+        result = before + cacheFn(tail, enabled);
       }
     } else if (result.trimEnd().endsWith("C")) {
       // Single trailing C without value (heavily truncated)
-      result = result.replace(/C\s*$/, (m) => themeCache(m, enabled));
+      result = result.replace(/C\s*$/, (m) => cacheFn(m, enabled));
     }
   }
   return result;
@@ -172,7 +186,15 @@ function cardLines(
   const totalLabel = inner < 15 ? "Total" : "Recorded";
   const total = `${themePurple(totalLabel, color, true)}  ${themeOrange(formatTokenCount(window.totals.recorded_total), color, true)}`;
   const first = pad(total, inner);
-  const components = formatTokenBreakdown(window.totals);
+  const rawComponents = formatTokenBreakdown(window.totals);
+  // Preserve the 4-space gaps ("    ") — truncate() would collapse them via safeLabel.
+  // Adaptively fall back to 2 spaces when the 4-space layout doesn't fit.
+  let displayComponents = rawComponents;
+  if (lineWidth(rawComponents) > inner) {
+    const fallback = rawComponents.replaceAll("    ", "  ");
+    if (lineWidth(fallback) <= inner) displayComponents = fallback;
+    else displayComponents = truncateExact(rawComponents, inner);
+  }
   const title = `${selected ? "▶" : "·"} ${cardTitle(kind)}`;
   const frame = (value: string): string => `│${pad(value, inner)}│`;
   const lines = [
@@ -181,7 +203,7 @@ function cardLines(
       ? themeOrange(truncate(title, inner), color, true)
       : themePurple(truncate(title, inner), color, true)),
     frame(first),
-    frame(colorizeBreakdown(truncate(components, inner), color)),
+    frame(colorizeBreakdown(truncateExact(displayComponents, inner), color, true)),
     frame(themeOrange(truncate(`Range ${safeLabel(window.window.label)}`, inner), color)),
     paint(border(width, "╰", "─", "╯"), borderColor, color),
   ];
