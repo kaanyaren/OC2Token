@@ -1,0 +1,27 @@
+{
+  "name": "oc2token",
+  "version": "0.1.0",
+  "description": "A macOS-first OpenCode 2 token usage dashboard CLI",
+  "type": "module",
+  "bin": {
+    "oc2token": "dist/cli.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": {"node": ">=20"},
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test",
+    "pack:check": "npm run build && npm pack --dry-run"
+  },
+  "keywords": ["opencode", "tokens", "terminal", "tui"],
+  "license": "MIT",
+  "publishConfig": {"access": "public"},
+  "dependencies": {
+    "@opencode-ai/client": "0.0.0-beta-18866"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
