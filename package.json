@@ -4,14 +4,14 @@
   "description": "A macOS-first OpenCode 2 token usage dashboard CLI",
   "type": "module",
   "bin": {
-    "oc2token": "dist/cli.js"
+    "oc2token": "dist/src/cli.js"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist/src", "README.md", "LICENSE"],
   "engines": {"node": ">=20"},
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test",
+    "test": "npm run build && node --test $(find dist/test -name '*.test.js' -print)",
     "pack:check": "npm run build && npm pack --dry-run"
   },
   "keywords": ["opencode", "tokens", "terminal", "tui"],

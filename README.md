@@ -19,6 +19,7 @@ oc2token hour            # start on the rolling hour view
 oc2token day             # start on today's local-calendar view
 oc2token week            # start on the ISO-week view
 oc2token --once --json   # one-shot machine-readable output
+oc2token doctor --json   # verify the local service and API
 oc2token --refresh 0     # manual-only dashboard
 oc2token doctor          # diagnose the local OpenCode 2 service
 ```
@@ -43,3 +44,6 @@ npm run pack:check
 
 OC2Token stores only normalized usage metadata in its own cache. It does not
 persist prompts, tool input, API keys, or session titles.
+
+One-shot JSON emits valid output for partial results and exits with status 3;
+connection or validation failures exit with status 1.
