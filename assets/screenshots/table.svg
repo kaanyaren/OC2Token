@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="788" height="670" viewBox="0 0 788 670" xmlns="http://www.w3.org/2000/svg" role="img">
+<defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.45"/></filter></defs>
+<rect width="788" height="670" rx="16" fill="#0b0a14"/>
+<g filter="url(#shadow)">
+<rect x="16" y="16" width="756" height="638" rx="12" fill="#140f25" stroke="#2a2045" stroke-opacity="0.9"/>
+<rect x="16" y="16" width="756" height="34" rx="12" fill="#1e1633"/>
+<rect x="16" y="42" width="756" height="8" fill="#1e1633"/>
+<circle cx="34" cy="33" r="6" fill="#ff5f56" stroke="#e0443e" stroke-width="0.5"/>
+<circle cx="54" cy="33" r="6" fill="#ffbd2e" stroke="#dea123" stroke-width="0.5"/>
+<circle cx="74" cy="33" r="6" fill="#27c93f" stroke="#1aab29" stroke-width="0.5"/>
+<text x="394" y="37" text-anchor="middle" font-family="ui-sans-serif, -apple-system, system-ui, Helvetica, Arial" font-size="11.5" font-weight="500" fill="#a99dc5" letter-spacing="0.2">oc2token --once --format table</text>
+<line x1="16" y1="50" x2="772" y2="50" stroke="#2a2045" stroke-opacity="0.6"/>
+<rect x="24" y="58" width="740" height="588" rx="8" fill="#15101f"/>
+<text font-family="'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace" font-size="12" line-height="16" xml:space="preserve">
+<tspan x="42" y="84" fill="#d9d2f0">OpenCode 2 Token Usage</tspan>
+<tspan x="42" y="100" fill="#d9d2f0">Source: unified  Version: 0.1.0</tspan>
+<tspan x="42" y="116" fill="#d9d2f0">Status: COMPLETE  Coverage: COMPLETE · 14/14 sessions</tspan>
+<tspan x="42" y="132" fill="#e6e2ff"> </tspan>
+<tspan x="42" y="148" fill="#d9d2f0">Window     Recorded  In      Out     Cache</tspan>
+<tspan x="42" y="164" fill="#d9d2f0">------     --------  --      ---     -----</tspan>
+<tspan x="42" y="180" fill="#d9d2f0">Last hour  15,582    10,560  3,452   1,570</tspan>
+<tspan x="42" y="196" fill="#d9d2f0">Today      45,752    31,060  9,997   4,695</tspan>
+<tspan x="42" y="212" fill="#d9d2f0">This week  76,542    52,260  16,427  7,855</tspan>
+<tspan x="42" y="228" fill="#e6e2ff"> </tspan>
+<tspan x="42" y="244" fill="#d9d2f0">Models</tspan>
+<tspan x="42" y="260" fill="#d9d2f0">Name                       Recorded  In      Out    Cache</tspan>
+<tspan x="42" y="276" fill="#d9d2f0">-------------------------  --------  ------  -----  -----</tspan>
+<tspan x="42" y="292" fill="#d9d2f0">openai/gpt-5-codex         19,278    13,800  3,918  1,560</tspan>
+<tspan x="42" y="308" fill="#d9d2f0">openai/gpt-5               18,770    12,400  4,050  2,320</tspan>
+<tspan x="42" y="324" fill="#d9d2f0">anthropic/claude-4-opus    18,420    12,400  3,920  2,100</tspan>
+<tspan x="42" y="340" fill="#d9d2f0">anthropic/claude-4-sonnet  12,280    8,500   3,090  690  </tspan>
+<tspan x="42" y="356" fill="#d9d2f0">google/gemini-3-flash      3,185     2,100   605    480  </tspan>
+<tspan x="42" y="372" fill="#d9d2f0">openai/gpt-4o              2,285     1,600   450    235  </tspan>
+<tspan x="42" y="388" fill="#d9d2f0">google/gemini-3-pro        1,594     940     254    400  </tspan>
+<tspan x="42" y="404" fill="#d9d2f0">openai/gpt-5-mini          730       520     140    70   </tspan>
+<tspan x="42" y="420" fill="#e6e2ff"> </tspan>
+<tspan x="42" y="436" fill="#d9d2f0">Providers</tspan>
+<tspan x="42" y="452" fill="#d9d2f0">Name         Recorded  In      Out    Cache</tspan>
+<tspan x="42" y="468" fill="#d9d2f0">-----------  --------  ------  -----  -----</tspan>
+<tspan x="42" y="484" fill="#d9d2f0">anthropic    30,700    20,900  7,010  2,790</tspan>
+<tspan x="42" y="500" fill="#d9d2f0">openai       21,785    14,520  4,640  2,625</tspan>
+<tspan x="42" y="516" fill="#d9d2f0">codex        19,278    13,800  3,918  1,560</tspan>
+<tspan x="42" y="532" fill="#d9d2f0">antigravity  4,779     3,040   859    880  </tspan>
+<tspan x="42" y="548" fill="#e6e2ff"> </tspan>
+<tspan x="42" y="564" fill="#d9d2f0">Projects</tspan>
+<tspan x="42" y="580" fill="#d9d2f0">Name                              Recorded  In      Out    Cache</tspan>
+<tspan x="42" y="596" fill="#d9d2f0">--------------------------------  --------  ------  -----  -----</tspan>
+<tspan x="42" y="612" fill="#d9d2f0">/Users/kaanyaren/GitHub/OC2Token  41,063    28,320  8,558  4,185</tspan>
+<tspan x="42" y="628" fill="#d9d2f0">/Users/kaanyaren/GitHub/opencode  30,700    20,900  7,010  2,790</tspan>
+<tspan x="42" y="644" fill="#d9d2f0">/Users/kaanyaren/work/client-app  4,779     3,040   859    880  </tspan>
+</text>
+</g>
+</svg>
