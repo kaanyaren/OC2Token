@@ -7,6 +7,7 @@ import {
   type UsageSource,
   type UsageTotals,
   type UsageWindowKind,
+  type UsageBreakdownsByWindow,
 } from "../domain/index.js";
 import type { StatsRequestOptions } from "./transport.js";
 
@@ -37,6 +38,8 @@ export class OpenCodeStatsSource implements UsageSource {
     throwIfAborted(request.signal);
     const health = await this.transport.getHealth({ signal: request.signal });
     const totalsByWindow: Partial<Record<UsageWindowKind, UsageTotals>> = {};
+    const modelsByWindow: Partial<Record<UsageWindowKind, NonNullable<CollectionResult["models"]>>> = {};
+    const providersByWindow: Partial<Record<UsageWindowKind, NonNullable<CollectionResult["providers"]>>> = {};
     let models = undefined;
     let providers = undefined;
 
@@ -50,11 +53,17 @@ export class OpenCodeStatsSource implements UsageSource {
       };
       const result = await this.transport.getSessionStats(window, options);
       totalsByWindow[window.kind] = result.totals;
-      // Keep the widest requested window's breakdown (the windows are built
-      // hour, day, week) so the panel is useful rather than showing only the
-      // last hour while the cards still retain exact per-window totals.
-      if (result.models !== undefined) models = result.models;
-      if (result.providers !== undefined) providers = result.providers;
+      // Keep the widest requested window's breakdown for backwards-compatible
+      // global fields, while also retaining each response for the selected
+      // dashboard period.
+      if (result.models !== undefined) {
+        models = result.models;
+        modelsByWindow[window.kind] = result.models;
+      }
+      if (result.providers !== undefined) {
+        providers = result.providers;
+        providersByWindow[window.kind] = result.providers;
+      }
     }
 
     throwIfAborted(request.signal);
@@ -66,6 +75,8 @@ export class OpenCodeStatsSource implements UsageSource {
       totalsByWindow,
       ...(models === undefined ? {} : { models }),
       ...(providers === undefined ? {} : { providers }),
+      ...(Object.keys(modelsByWindow).length === 0 ? {} : { modelsByWindow: modelsByWindow as UsageBreakdownsByWindow }),
+      ...(Object.keys(providersByWindow).length === 0 ? {} : { providersByWindow: providersByWindow as UsageBreakdownsByWindow }),
       coverage: completeStatsCoverage,
       serverFingerprint: health.fingerprint,
       serverVersion: health.version,

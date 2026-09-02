@@ -41,6 +41,8 @@ export interface DashboardWindow {
   readonly window: UsageWindow;
   readonly totals: UsageTotals;
   readonly trends: ReadonlyArray<TrendBucket>;
+  readonly models: ReadonlyArray<BreakdownTotal>;
+  readonly providers: ReadonlyArray<BreakdownTotal>;
 }
 
 export interface DashboardSnapshot {
@@ -356,12 +358,19 @@ function deriveTrends(
 function recordsAsBreakdown(
   root: UnknownRecord,
   key: "model" | "provider",
+  window?: UsageWindow,
 ): ReadonlyArray<BreakdownTotal> {
   if (!Array.isArray(root.records)) return [];
   const totals = new Map<string, TokenComponents>();
   for (const item of root.records) {
     const record = asRecord(item);
     if (record.completeness === "provisional") continue;
+    if (window !== undefined) {
+      const createdAt = asDate(record.createdAt ?? record.time);
+      if (createdAt === null) continue;
+      const timestamp = new Date(createdAt).getTime();
+      if (!Number.isFinite(timestamp) || timestamp < window.from.getTime() || timestamp >= window.to.getTime()) continue;
+    }
     const model = asOptionalString(record.model);
     const name = asOptionalString(record[key]) ??
       (key === "provider" && model?.includes("/") ? model.split("/", 1)[0] : undefined);
@@ -386,6 +395,30 @@ function recordsAsBreakdown(
   return normalizeBreakdown(
     [...totals.entries()].map(([name, value]) => ({ name, ...value })),
   );
+}
+
+function breakdownForWindow(
+  root: UnknownRecord,
+  key: "model" | "provider",
+  kind: UsageWindowKind,
+  window: UsageWindow,
+): ReadonlyArray<BreakdownTotal> {
+  const byWindow = asRecord(root[key === "model" ? "modelsByWindow" : "providersByWindow"]);
+  const scoped = byWindow[kind];
+  if (Array.isArray(scoped)) return normalizeBreakdown(scoped);
+
+  const global = key === "model"
+    ? root.models ?? root.modelTotals ?? asRecord(root.breakdown).models
+    : root.providers ?? root.providerTotals ?? asRecord(root.breakdown).providers;
+  if (Array.isArray(global)) return normalizeBreakdown(global);
+
+  // Message scans carry individual records rather than stats aggregates, so
+  // derive the selected window directly from record creation timestamps.
+  if (Array.isArray(root.records) && root.records.length > 0) {
+    return recordsAsBreakdown(root, key, window);
+  }
+
+  return normalizeBreakdown(global);
 }
 
 /**
@@ -421,10 +454,14 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
       windowData.trends ??
       (Array.isArray(rootTrends[kind]) ? rootTrends[kind] : undefined),
     );
+    const models = breakdownForWindow(root, "model", kind, window);
+    const providers = breakdownForWindow(root, "provider", kind, window);
     windows[kind] = {
       window,
       totals: readTotals(root, kind, windowData),
       trends: trends.length > 0 ? trends : deriveTrends(root, kind, window),
+      models,
+      providers,
     };
   }
 
@@ -433,12 +470,12 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
     root.models ??
     root.modelTotals ??
     asRecord(root.breakdown).models ??
-    recordsAsBreakdown(root, "model");
+    windows.week.models;
   const providerValues =
     root.providers ??
     root.providerTotals ??
     asRecord(root.breakdown).providers ??
-    recordsAsBreakdown(root, "provider");
+    windows.week.providers;
   return {
     windows,
     source: sourceVersion.source,

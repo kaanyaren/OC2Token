@@ -251,7 +251,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       isTTY: true,
       ansi: true,
       color: options.color,
-      width: Math.max(40, io.stdout.columns || 100),
+      width: Math.max(20, io.stdout.columns || 100),
       now: clock.wallNow(),
       selectedWindow: state.period,
       help,

@@ -2,6 +2,15 @@ export const ANSI = Object.freeze({
   reset: "\u001b[0m",
   bold: "\u001b[1m",
   dim: "\u001b[2m",
+  // CodeBurn-inspired terminal palette: violet carries structure, orange
+  // carries focus and activity. 256-color escapes work in Terminal.app,
+  // iTerm2, and modern CI TTYs without requiring a background color.
+  purple: "\u001b[38;5;141m",
+  purpleDeep: "\u001b[38;5;99m",
+  purpleBright: "\u001b[38;5;183m",
+  purpleDim: "\u001b[38;5;103m",
+  orange: "\u001b[38;5;208m",
+  orangeBright: "\u001b[38;5;214m",
   cyan: "\u001b[36m",
   blue: "\u001b[34m",
   green: "\u001b[32m",
@@ -37,6 +46,14 @@ export function paint(value: string, code: string, enabled: boolean): string {
 
 export function emphasis(value: string, enabled: boolean): string {
   return paint(value, ANSI.bold, enabled);
+}
+
+export function themePurple(value: string, enabled: boolean, bright = false): string {
+  return paint(value, bright ? ANSI.purpleBright : ANSI.purple, enabled);
+}
+
+export function themeOrange(value: string, enabled: boolean, bright = false): string {
+  return paint(value, bright ? ANSI.orangeBright : ANSI.orange, enabled);
 }
 
 export function statusColor(

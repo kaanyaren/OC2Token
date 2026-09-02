@@ -32,6 +32,10 @@ export interface UsageBreakdown {
   readonly totals: UsageTotals;
 }
 
+export type UsageBreakdownsByWindow = Readonly<
+  Partial<Record<UsageWindowKind, ReadonlyArray<UsageBreakdown>>>
+>;
+
 /**
  * One immutable collection intent. `capturedAt` and `windows` are created
  * together so hour/day/week workers cannot each choose a different `now`.
@@ -68,6 +72,8 @@ export interface CollectionResult {
   readonly totalsByWindow: UsageTotalsByWindow;
   readonly models?: ReadonlyArray<UsageBreakdown>;
   readonly providers?: ReadonlyArray<UsageBreakdown>;
+  readonly modelsByWindow?: UsageBreakdownsByWindow;
+  readonly providersByWindow?: UsageBreakdownsByWindow;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;
@@ -91,6 +97,8 @@ export interface StoredSnapshot {
   readonly totalsByWindow: UsageTotalsByWindow;
   readonly models?: ReadonlyArray<UsageBreakdown>;
   readonly providers?: ReadonlyArray<UsageBreakdown>;
+  readonly modelsByWindow?: UsageBreakdownsByWindow;
+  readonly providersByWindow?: UsageBreakdownsByWindow;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;

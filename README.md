@@ -26,6 +26,8 @@ oc2token doctor          # diagnose the local OpenCode 2 service
 
 Press `r` to refresh, `1`/`2`/`3` to select hour/day/week, `?` for help, and
 `q` to quit. Use `--timezone Europe/Istanbul` to override the local timezone.
+The interactive dashboard uses a purple/orange CodeBurn-inspired palette;
+pass `--no-color` (or set `NO_COLOR`) for a plain terminal-safe view.
 
 The report calls the sum of input, output, reasoning, cache-read, and
 cache-write tokens `recorded_total`; it is not a billing or quota total. A

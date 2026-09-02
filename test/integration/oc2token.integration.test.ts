@@ -120,6 +120,21 @@ class HybridFixtureTransport implements OpenCodeTransport {
   }
 }
 
+class ScopedBreakdownTransport extends HybridFixtureTransport {
+  async getSessionStats(window: UsageWindow): Promise<OpenCodeSessionStats> {
+    const result = await super.getSessionStats(window);
+    const input = window.kind === "hour" ? 11 : window.kind === "day" ? 22 : 33;
+    const providerInput = input + 10;
+    const modelTotals = toUsageTotals({ input, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+    const providerTotals = toUsageTotals({ input: providerInput, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+    return {
+      ...result,
+      models: [{ name: `${window.kind}-model`, provider: `${window.kind}-provider`, totals: modelTotals }],
+      providers: [{ name: `${window.kind}-provider`, totals: providerTotals }],
+    };
+  }
+}
+
 function adapterFor(transport: OpenCodeTransport): OpenCode2AdapterType {
   const stats = new OpenCodeStatsSource(transport);
   const adapter = {
@@ -147,6 +162,17 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);
   assert.equal(result.totalsByWindow.week?.recorded_total, 103);
   assert.equal(result.serverFingerprint, "fixture-beta:123");
+});
+
+test("OpenCodeStatsSource retains model/provider breakdowns for each window", async () => {
+  const result = await new OpenCodeStatsSource(new ScopedBreakdownTransport()).collect(request());
+
+  assert.equal(result.modelsByWindow?.hour?.[0]?.totals.recorded_total, 11);
+  assert.equal(result.modelsByWindow?.day?.[0]?.totals.recorded_total, 22);
+  assert.equal(result.modelsByWindow?.week?.[0]?.totals.recorded_total, 33);
+  assert.equal(result.providersByWindow?.hour?.[0]?.totals.recorded_total, 21);
+  assert.equal(result.providersByWindow?.day?.[0]?.totals.recorded_total, 32);
+  assert.equal(result.providersByWindow?.week?.[0]?.totals.recorded_total, 43);
 });
 
 test("HybridUsageSource falls back for the whole refresh when stats ignores one range", async () => {
