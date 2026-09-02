@@ -85,3 +85,24 @@ test("record IDs cannot make an ambiguous slash-delimited key", () => {
   assert.throws(() => usageRecordKey("ses/root", "msg-1"), /must not contain/);
   assert.throws(() => usageRecordKey("ses-root", "msg/1"), /must not contain/);
 });
+
+test("provider defaults to opencode and valid providerKinds are accepted", () => {
+  const defaults = createUsageRecord(recordInput());
+  assert.equal(defaults.provider, "opencode");
+
+  const codex = createUsageRecord(recordInput({ provider: "codex", messageID: "msg-codex" }));
+  const antigravity = createUsageRecord(recordInput({ provider: "antigravity", messageID: "msg-ag" }));
+  assert.equal(codex.provider, "codex");
+  assert.equal(antigravity.provider, "antigravity");
+
+  assert.throws(() => createUsageRecord(recordInput({ provider: "openai" as unknown as "opencode", messageID: "msg-bad" })), /must be one of/);
+});
+
+test("record summing aggregates across mixed providers without exclusion", () => {
+  const window = createUsageWindow("week", new Date("2026-09-02T10:00:00.000Z"), "UTC");
+  const opencode = createUsageRecord(recordInput({ provider: "opencode", messageID: "msg-opencode", createdAt: new Date("2026-09-02T09:00:00.000Z"), tokens: { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } }));
+  const codex = createUsageRecord(recordInput({ provider: "codex", messageID: "msg-codex2", createdAt: new Date("2026-09-02T09:10:00.000Z"), tokens: { input: 20, output: 5, reasoning: 0, cacheRead: 1, cacheWrite: 0 } }));
+  const antigravity = createUsageRecord(recordInput({ provider: "antigravity", messageID: "msg-ag2", createdAt: new Date("2026-09-02T09:20:00.000Z"), tokens: { input: 30, output: 2, reasoning: 1, cacheRead: 0, cacheWrite: 0 } }));
+  assert.equal(sumUsageRecords([opencode, codex, antigravity], window).recorded_total, 10 + 26 + 33);
+  assert.equal(sumUsageRecords([opencode, codex], window).input, 30);
+});

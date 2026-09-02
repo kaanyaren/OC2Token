@@ -1,4 +1,5 @@
 /* The cache depends only on the shared domain types, never on domain runtime code. */
+import type { ProviderKind } from "../domain/index.js";
 import type { StoredSnapshot, UsageRecord } from "../domain/index.js";
 
 export type { StoredSnapshot, UsageRecord };
@@ -7,7 +8,7 @@ export const CACHE_FORMAT = "oc2token.normalized-cache" as const;
 export const RECORDS_FORMAT = "oc2token.normalized-records" as const;
 export const MANIFEST_FILE_NAME = "manifest.json" as const;
 export const LOCK_DIRECTORY_NAME = ".lock" as const;
-export const CURRENT_CACHE_SCHEMA_VERSION = 1 as const;
+export const CURRENT_CACHE_SCHEMA_VERSION = 2 as const;
 
 export interface CacheFileHandle {
   writeFile(data: string): Promise<void>;
@@ -80,6 +81,7 @@ export interface CacheManifest {
   readonly recordBytes: number;
   readonly recordSha256: string;
   readonly snapshot: unknown;
+  readonly providerFingerprints?: Record<ProviderKind, string>;
 }
 
 export interface CacheReadAvailable {

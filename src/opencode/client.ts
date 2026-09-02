@@ -27,6 +27,9 @@ export interface OpenCodeClientLike {
   readonly message: {
     list(...args: any[]): Promise<unknown>;
   };
+  readonly project?: {
+    list(...args: any[]): Promise<unknown>;
+  };
 }
 
 export interface ServiceLifecycle {

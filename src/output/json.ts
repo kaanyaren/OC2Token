@@ -10,7 +10,7 @@ import {
   type TrendBucket,
 } from "../dashboard/render/types.js";
 
-export const JSON_SCHEMA_VERSION = 1 as const;
+export const JSON_SCHEMA_VERSION = 3 as const;
 
 export interface SerializedWindow {
   readonly kind: UsageWindowKind;
@@ -35,6 +35,7 @@ export interface StableCoverage {
   readonly provisionalMessages: number;
   readonly errors: ReadonlyArray<{
     readonly code: string;
+    readonly message?: string;
     readonly sessionID?: string;
     readonly retryable: boolean;
   }>;
@@ -66,6 +67,11 @@ export interface StableJSONSnapshot {
   readonly trends: Readonly<Record<UsageWindowKind, ReadonlyArray<SerializedTrend>>>;
   readonly models: ReadonlyArray<SerializedBreakdown>;
   readonly providers: ReadonlyArray<SerializedBreakdown>;
+  readonly projects: ReadonlyArray<SerializedBreakdown>;
+  readonly providersByWindow: Readonly<Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>>;
+  readonly projectsByWindow: Readonly<Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>>;
+  readonly totalsByProvider: Readonly<Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>>;
+  readonly totalsByProject: Readonly<Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>>;
 }
 
 function dateToISO(value: DateLike | null): string | null {
@@ -110,6 +116,7 @@ function serializeCoverage(value: CoverageView): StableCoverage {
     provisionalMessages: value.provisionalMessages,
     errors: value.errors.map((error) => ({
       code: error.code,
+      ...(error.message === undefined ? {} : { message: error.message }),
       ...(error.sessionID === undefined ? {} : { sessionID: error.sessionID }),
       retryable: error.retryable,
     })),
@@ -142,11 +149,27 @@ export function toJSONSnapshot(input: DashboardSnapshotInput): StableJSONSnapsho
   const windows = {} as Record<UsageWindowKind, SerializedWindow>;
   const totals = {} as Record<UsageWindowKind, UsageTotals>;
   const trends = {} as Record<UsageWindowKind, ReadonlyArray<SerializedTrend>>;
+  const providersByWindow = {} as Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>;
+  const projectsByWindow = {} as Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>;
+  const totalsByProvider = {} as Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>;
+  const totalsByProject = {} as Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>;
 
   for (const kind of allWindowKinds()) {
     windows[kind] = serializeWindow(snapshot.windows[kind]);
     totals[kind] = snapshot.windows[kind].totals;
     trends[kind] = snapshot.windows[kind].trends.map(serializeTrend);
+    providersByWindow[kind] = snapshot.windows[kind].providers.map(serializeBreakdown);
+    projectsByWindow[kind] = snapshot.windows[kind].projects.map(serializeBreakdown);
+    const perProvider: Record<string, UsageTotals> = {};
+    for (const entry of snapshot.windows[kind].providers) {
+      perProvider[entry.name] = entry.totals;
+    }
+    totalsByProvider[kind] = perProvider;
+    const perProject: Record<string, UsageTotals> = {};
+    for (const entry of snapshot.windows[kind].projects) {
+      perProject[entry.name] = entry.totals;
+    }
+    totalsByProject[kind] = perProject;
   }
 
   return {
@@ -162,6 +185,11 @@ export function toJSONSnapshot(input: DashboardSnapshotInput): StableJSONSnapsho
     trends,
     models: snapshot.models.map(serializeBreakdown),
     providers: snapshot.providers.map(serializeBreakdown),
+    projects: snapshot.projects.map(serializeBreakdown),
+    providersByWindow,
+    projectsByWindow,
+    totalsByProvider,
+    totalsByProject,
   };
 }
 

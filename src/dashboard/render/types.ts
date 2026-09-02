@@ -19,6 +19,7 @@ export interface CoverageView {
   readonly provisionalMessages: number;
   readonly errors: ReadonlyArray<{
     readonly code: string;
+    readonly message?: string;
     readonly sessionID?: string;
     readonly retryable: boolean;
   }>;
@@ -43,6 +44,7 @@ export interface DashboardWindow {
   readonly trends: ReadonlyArray<TrendBucket>;
   readonly models: ReadonlyArray<BreakdownTotal>;
   readonly providers: ReadonlyArray<BreakdownTotal>;
+  readonly projects: ReadonlyArray<BreakdownTotal>;
 }
 
 export interface DashboardSnapshot {
@@ -55,6 +57,7 @@ export interface DashboardSnapshot {
   readonly coverage: CoverageView;
   readonly models: ReadonlyArray<BreakdownTotal>;
   readonly providers: ReadonlyArray<BreakdownTotal>;
+  readonly projects: ReadonlyArray<BreakdownTotal>;
 }
 
 export type DashboardSnapshotInput =
@@ -62,6 +65,17 @@ export type DashboardSnapshotInput =
   | StoredSnapshot
   | DashboardSnapshot
   | Readonly<Record<string, unknown>>;
+
+export interface DashboardSettingsView {
+  readonly visible: boolean;
+  readonly enabledProviders: ReadonlyArray<string>;
+  readonly refreshIntervalSeconds: number;
+  readonly focusedIndex: number;
+}
+
+export interface DashboardProjectsView {
+  readonly visible: boolean;
+}
 
 export interface DashboardRenderOptions {
   readonly ansi?: boolean;
@@ -72,6 +86,8 @@ export interface DashboardRenderOptions {
   readonly selectedWindow?: UsageWindowKind;
   readonly help?: boolean;
   readonly previousLineCount?: number;
+  readonly settings?: DashboardSettingsView;
+  readonly projects?: DashboardProjectsView;
 }
 
 export interface OutputOptions extends DashboardRenderOptions {
@@ -240,6 +256,9 @@ function normalizeCoverage(value: unknown, stale: boolean): CoverageView {
         const error = asRecord(item);
         return {
           code: asString(error.code, "unknown"),
+          ...(asOptionalString(error.message) === undefined
+            ? {}
+            : { message: asOptionalString(error.message) }),
           ...(asOptionalString(error.sessionID) === undefined
             ? {}
             : { sessionID: asOptionalString(error.sessionID) }),
@@ -313,7 +332,7 @@ function deriveTrends(
   if (!Array.isArray(root.records)) return [];
   const duration = window.to.getTime() - window.from.getTime();
   const bucketDuration = kind === "hour"
-    ? 15 * 60 * 1000
+    ? 5 * 60 * 1000
     : kind === "day"
       ? 60 * 60 * 1000
       : 24 * 60 * 60 * 1000;
@@ -357,7 +376,7 @@ function deriveTrends(
 
 function recordsAsBreakdown(
   root: UnknownRecord,
-  key: "model" | "provider",
+  key: "model" | "provider" | "project",
   window?: UsageWindow,
 ): ReadonlyArray<BreakdownTotal> {
   if (!Array.isArray(root.records)) return [];
@@ -372,8 +391,24 @@ function recordsAsBreakdown(
       if (!Number.isFinite(timestamp) || timestamp < window.from.getTime() || timestamp >= window.to.getTime()) continue;
     }
     const model = asOptionalString(record.model);
-    const name = asOptionalString(record[key]) ??
-      (key === "provider" && model?.includes("/") ? model.split("/", 1)[0] : undefined);
+    const rawName = asOptionalString(record[key]);
+    let name: string | undefined;
+    if (key === "provider") {
+      // For opencode records the provider field is the generic "opencode" – the
+      // vendor (openai, anthropic …) lives in the model prefix and is what the
+      // Providers breakdown is expected to show in single-source fixtures.
+      if (rawName === "opencode" && model?.includes("/")) {
+        name = model.split("/", 1)[0];
+      } else {
+        name = rawName ?? (model?.includes("/") ? model.split("/", 1)[0] : undefined);
+      }
+    } else if (key === "project") {
+      name = rawName;
+      // Also accept directory-like values directly
+      if (!name && typeof record.project === "string") name = record.project;
+    } else {
+      name = rawName;
+    }
     if (!name) continue;
     const current: {
       input: number;
@@ -397,20 +432,81 @@ function recordsAsBreakdown(
   );
 }
 
+function breakdownFromMap(value: unknown): ReadonlyArray<BreakdownTotal> | null {
+  if (!isRecord(value) || Array.isArray(value)) return null;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  const sample = entries.find(([, entry]) => isRecord(entry) || typeof entry === "object");
+  if (sample === undefined) return null;
+  // Detect totals-like map: value looks like { opencode: { input:.. } } and not a breakdown item
+  const isTotalsMap = entries.every(([, entry]) => {
+    const record = asRecord(entry);
+    return (
+      "input" in record ||
+      "output" in record ||
+      "recorded_total" in record ||
+      "totals" in record ||
+      "usage" in record
+    );
+  });
+  if (!isTotalsMap) return null;
+  const breakdown = entries.map(([name, entry]) => {
+    const record = asRecord(entry);
+    const totalsSource = "totals" in record || "usage" in record ? (record.totals ?? record.usage) : entry;
+    return { name, provider: keyIsProvider(name) ? name : undefined, totals: totalsFor(totalsSource) } as unknown as BreakdownTotal & { totals: unknown };
+  });
+  // Require at least provider-like keys for provider maps
+  return breakdown.length > 0 ? normalizeBreakdown(breakdown as unknown as ReadonlyArray<BreakdownTotal>) : null;
+}
+
+function keyIsProvider(value: string): boolean {
+  return value === "opencode" || value === "codex" || value === "antigravity";
+}
+
 function breakdownForWindow(
   root: UnknownRecord,
-  key: "model" | "provider",
+  key: "model" | "provider" | "project",
   kind: UsageWindowKind,
   window: UsageWindow,
 ): ReadonlyArray<BreakdownTotal> {
-  const byWindow = asRecord(root[key === "model" ? "modelsByWindow" : "providersByWindow"]);
+  const byWindowKey = key === "model" ? "modelsByWindow" : key === "provider" ? "providersByWindow" : "projectsByWindow";
+  const byWindow = asRecord(root[byWindowKey]);
   const scoped = byWindow[kind];
   if (Array.isArray(scoped)) return normalizeBreakdown(scoped);
+  const scopedMap = breakdownFromMap(scoped);
+  if (scopedMap !== null) return scopedMap;
+
+  // Additive alias: totalsByProvider / totalsByWindow style maps
+  if (key === "provider") {
+    const totalsAlias = asRecord(root.totalsByProvider ?? (root as Record<string, unknown>).totalsByWindow ?? {});
+    const aliasScoped = totalsAlias[kind];
+    if (Array.isArray(aliasScoped)) return normalizeBreakdown(aliasScoped);
+    const aliasMap = breakdownFromMap(aliasScoped);
+    if (aliasMap !== null) return aliasMap;
+    const aliasGlobal = asRecord(root.totalsByProvider ?? {});
+    const hasProviderKeys = ["opencode", "codex", "antigravity"].some((provider) => provider in aliasGlobal);
+    if (hasProviderKeys) {
+      const globalMap = breakdownFromMap(aliasGlobal);
+      if (globalMap !== null) return globalMap;
+    }
+  }
+
+  if (key === "project") {
+    const totalsAlias = asRecord(root.totalsByProject ?? (root as Record<string, unknown>).totalsByProject ?? {});
+    const aliasScoped = totalsAlias[kind];
+    if (Array.isArray(aliasScoped)) return normalizeBreakdown(aliasScoped);
+    const aliasMap = breakdownFromMap(aliasScoped);
+    if (aliasMap !== null) return aliasMap;
+  }
 
   const global = key === "model"
     ? root.models ?? root.modelTotals ?? asRecord(root.breakdown).models
-    : root.providers ?? root.providerTotals ?? asRecord(root.breakdown).providers;
+    : key === "provider"
+      ? root.providers ?? root.providerTotals ?? asRecord(root.breakdown).providers
+      : root.projects ?? root.projectTotals ?? asRecord(root.breakdown).projects;
   if (Array.isArray(global)) return normalizeBreakdown(global);
+  const globalMap = breakdownFromMap(global);
+  if (globalMap !== null) return globalMap;
 
   // Message scans carry individual records rather than stats aggregates, so
   // derive the selected window directly from record creation timestamps.
@@ -438,6 +534,7 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
   const stale = root.stale === true;
   const sourceVersion = sourceAndVersion(root);
   const rootTrends = asRecord(root.trends);
+  const trendsByWindow = asRecord(root.trendsByWindow);
   const windows = {} as Record<UsageWindowKind, DashboardWindow>;
 
   for (const kind of WINDOW_KINDS) {
@@ -450,42 +547,77 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
       requestedWindow ?? windowData.window ?? windowData,
       timezone,
     );
-    const trends = normalizeTrends(
+    const suppliedTrends =
       windowData.trends ??
-      (Array.isArray(rootTrends[kind]) ? rootTrends[kind] : undefined),
-    );
+      (Array.isArray(rootTrends[kind]) ? rootTrends[kind] : undefined) ??
+      (Array.isArray(trendsByWindow[kind]) ? trendsByWindow[kind] : undefined);
+    const trends = normalizeTrends(suppliedTrends);
     const models = breakdownForWindow(root, "model", kind, window);
     const providers = breakdownForWindow(root, "provider", kind, window);
+    const projects = breakdownForWindow(root, "project", kind, window);
     windows[kind] = {
       window,
       totals: readTotals(root, kind, windowData),
-      trends: trends.length > 0 ? trends : deriveTrends(root, kind, window),
+      trends: Array.isArray(suppliedTrends) ? trends : deriveTrends(root, kind, window),
       models,
       providers,
+      projects,
     };
   }
 
   const coverage = normalizeCoverage(root.coverage, stale);
-  const modelValues =
+  const rawModelValues =
     root.models ??
     root.modelTotals ??
     asRecord(root.breakdown).models ??
     windows.week.models;
-  const providerValues =
+  const rawProviderValues =
     root.providers ??
     root.providerTotals ??
     asRecord(root.breakdown).providers ??
     windows.week.providers;
+  const rawProjectValues =
+    root.projects ??
+    root.projectTotals ??
+    asRecord(root.breakdown).projects ??
+    windows.week.projects;
+  const modelMapFallback = breakdownFromMap(rawModelValues);
+  const providerMapFallback =
+    breakdownFromMap(rawProviderValues) ??
+    breakdownFromMap(asRecord((root as Record<string, unknown>).totalsByProvider ?? {}));
+  const projectMapFallback =
+    breakdownFromMap(rawProjectValues) ??
+    breakdownFromMap(asRecord((root as Record<string, unknown>).totalsByProject ?? {}));
+  const models = Array.isArray(rawModelValues)
+    ? normalizeBreakdown(rawModelValues)
+    : modelMapFallback ?? normalizeBreakdown(rawModelValues);
+  const providers = Array.isArray(rawProviderValues)
+    ? normalizeBreakdown(rawProviderValues)
+    : providerMapFallback ?? normalizeBreakdown(rawProviderValues);
+  const projects = Array.isArray(rawProjectValues)
+    ? normalizeBreakdown(rawProjectValues)
+    : projectMapFallback ?? normalizeBreakdown(rawProjectValues);
+  // Derive from records if global is empty but window projects exist
+  const derivedProjects = projects.length === 0 && Array.isArray(root.records) && root.records.length > 0
+    ? recordsAsBreakdown(root, "project")
+    : projects;
+  const effectiveProjects = derivedProjects.length > 0 ? derivedProjects : projects;
+  const hasMultiProviders =
+    providers.length > 1 || Object.values(windows).some((entry) => entry.providers.length > 1);
+  const source =
+    sourceVersion.source === "unified" || hasMultiProviders ? "unified" : sourceVersion.source || (hasMultiProviders ? "unified" : "unknown");
+  const finalSource = hasMultiProviders ? "unified" : source;
   return {
     windows,
-    source: sourceVersion.source,
+    source: finalSource,
     version: sourceVersion.version,
     lastUpdated: asDate(root.lastUpdated ?? metadata.lastUpdated ?? root.capturedAt),
     nextRefreshAt: asDate(root.nextRefreshAt ?? metadata.nextRefreshAt),
     stale,
     coverage,
-    models: normalizeBreakdown(modelValues),
-    providers: normalizeBreakdown(providerValues),
+    models,
+    providers,
+    projects: effectiveProjects,
   };
 }
 

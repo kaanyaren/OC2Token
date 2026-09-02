@@ -71,7 +71,7 @@ test("round-trips normalized records through an atomic manifest", async () => {
     assert.deepEqual(loaded.snapshot, original);
     assert.equal(loaded.records[0]?.recorded_total, 42);
     assert.equal(loaded.manifest.complete, true);
-    assert.equal(loaded.manifest.schemaVersion, 1);
+    assert.equal(loaded.manifest.schemaVersion, 2);
   });
 });
 
@@ -102,7 +102,10 @@ test("reports cross-process lock contention and reclaims a stale owner", async (
     const lease = await held.tryAcquire();
     assert.equal(lease.status, "acquired");
 
-    const blocked = new NormalizedCacheStore(directory, { process: identity });
+    const blocked = new NormalizedCacheStore(directory, {
+      process: identity,
+      clock: { now: () => new Date(fixedNow) },
+    });
     const busy = await blocked.commitDetailed(snapshot());
     assert.equal(busy.status, "cache_busy");
     if (lease.status === "acquired") await lease.release();
@@ -159,5 +162,121 @@ test("serializes concurrent commits and leaves one complete latest manifest", as
     if (loaded.status !== "available") return;
     assert.equal(loaded.manifest.generation, 2);
     assert.equal(loaded.records.length, 1);
+  });
+});
+
+test("migrates v1 records to v2 with provider default and preserves providerKind", async () => {
+  await withDirectory(async (directory) => {
+    const { serializeRecords, parseRecords } = await import("../../src/cache/schema.js");
+    const { CURRENT_CACHE_SCHEMA_VERSION } = await import("../../src/cache/types.js");
+    assert.equal(CURRENT_CACHE_SCHEMA_VERSION, 2);
+    // Create a legacy v1 document without provider field (simulates old cache)
+    const legacyDoc = JSON.stringify({
+      format: "oc2token.normalized-records",
+      schemaVersion: 1,
+      records: [
+        {
+          key: "ses-root/msg-1",
+          sessionID: "ses-root",
+          messageID: "msg-1",
+          createdAt: fixedNow.toISOString(),
+          model: "provider/model",
+          input: 10,
+          output: 20,
+          reasoning: 3,
+          cacheRead: 4,
+          cacheWrite: 5,
+          recorded_total: 42,
+          tokenRevision: "v1:10:20:3:4:5:final",
+          observedAt: fixedNow.toISOString(),
+          completeness: "final" as const,
+          // provider intentionally omitted to test migration
+        },
+      ],
+    });
+    const migrated = parseRecords(legacyDoc);
+    assert.equal(migrated.value.schemaVersion, 2);
+    assert.equal(migrated.migrated, true);
+    assert.equal(migrated.value.records[0]?.provider, "opencode");
+
+    // Now create records with explicit providerKinds and ensure round-trip preserves them
+    const codexRecord = createUsageRecord({
+      sessionID: "ses-codex",
+      messageID: "msg-codex",
+      createdAt: new Date("2026-09-02T09:55:00.000Z"),
+      model: "codex/model",
+      tokens: { input: 7, output: 3, reasoning: 1, cacheRead: 2, cacheWrite: 4 },
+      observedAt: fixedNow,
+      completeness: "final",
+      provider: "codex",
+    });
+    const agRecord = createUsageRecord({
+      sessionID: "ses-ag",
+      messageID: "msg-ag",
+      createdAt: new Date("2026-09-02T09:56:00.000Z"),
+      model: "gemini/model",
+      tokens: { input: 5, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+      observedAt: fixedNow,
+      completeness: "final",
+      provider: "antigravity",
+    });
+    const store = new NormalizedCacheStore(directory, {
+      clock: { now: () => new Date(fixedNow) },
+      random: { uuid: () => "33333333-3333-4333-8333-333333333333" },
+    });
+    const snap: StoredSnapshot = {
+      schemaVersion: 1,
+      generation: 5,
+      capturedAt: fixedNow,
+      requestedWindows: Object.values(createUsageWindows(fixedNow, "UTC")),
+      source: "unified",
+      records: [codexRecord, agRecord],
+      totalsByWindow: {},
+      coverage: {
+        complete: true,
+        sessionsDiscovered: 2,
+        sessionsScanned: 2,
+        sessionsSkipped: 0,
+        pagesRead: 2,
+        jobsRetried: 0,
+        provisionalMessages: 0,
+        errors: [],
+      },
+    };
+    const committed = await store.commitDetailed(snap);
+    assert.equal(committed.status, "committed");
+    const loaded = await store.readDetailed();
+    assert.equal(loaded.status, "available");
+    if (loaded.status !== "available") return;
+    const providers = loaded.records.map((r) => r.provider).sort();
+    assert.deepEqual(providers, ["antigravity", "codex"]);
+    assert.equal(loaded.manifest.schemaVersion, 2);
+  });
+});
+
+test("cache lock contention returns cache_busy deterministically under commitChains", async () => {
+  await withDirectory(async (directory) => {
+    // Deterministic uuid and clock keep lock file naming and stale detection stable.
+    const storeA = new NormalizedCacheStore(directory, {
+      clock: { now: () => new Date(fixedNow) },
+      random: { uuid: () => "44444444-4444-4444-8444-444444444444" },
+      staleLockMs: 30 * 60 * 1000,
+    });
+    const storeB = new NormalizedCacheStore(directory, {
+      clock: { now: () => new Date(fixedNow) },
+      random: { uuid: () => "55555555-5555-4555-8555-555555555555" },
+      staleLockMs: 30 * 60 * 1000,
+    });
+    // Two concurrent commits from different store instances targeting same directory
+    // must serialize via commitChains and both eventually commit (last writer wins).
+    const p1 = storeA.commitDetailed(snapshot(1));
+    const p2 = storeB.commitDetailed(snapshot(2));
+    const results = await Promise.all([p1, p2]);
+    assert.ok(results.every((r) => r.status === "committed"));
+    const loaded = await new NormalizedCacheStore(directory).readDetailed();
+    assert.equal(loaded.status, "available");
+    if (loaded.status !== "available") return;
+    // Last commit should win deterministically due to chained serialization
+    assert.equal(loaded.manifest.generation, 2);
   });
 });

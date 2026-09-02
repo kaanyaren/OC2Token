@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   containsInstant,
   createUsageWindow,
+  createUsageTrendBuckets,
   createUsageWindows,
 } from "../../src/domain/index.js";
 
@@ -78,6 +79,40 @@ test("ISO week rolls on local Monday and preserves DST-safe bounds", () => {
   assert.equal(hours(fallWeek.from, fallWeek.to), 169);
 });
 
+test("trend buckets partition each requested window", () => {
+  const windows = createUsageWindows(instant("2026-09-02T10:15:30.000Z"), "Europe/Istanbul");
+
+  for (const [kind, expectedCount] of [["hour", 12], ["day", 24], ["week", 7]] as const) {
+    const window = windows[kind];
+    const buckets = createUsageTrendBuckets(window);
+    assert.equal(buckets.length, expectedCount);
+    assert.equal(buckets[0]?.from.getTime(), window.from.getTime());
+    assert.equal(buckets.at(-1)?.to.getTime(), window.to.getTime());
+    for (let index = 1; index < buckets.length; index += 1) {
+      assert.equal(buckets[index - 1]?.to.getTime(), buckets[index]?.from.getTime());
+    }
+  }
+});
+
+test("trend buckets preserve missing and repeated DST hours", () => {
+  const spring = createUsageTrendBuckets(createUsageWindow(
+    "day",
+    instant("2024-03-10T16:00:00.000Z"),
+    "America/New_York",
+  ));
+  const fall = createUsageTrendBuckets(createUsageWindow(
+    "day",
+    instant("2024-11-03T17:00:00.000Z"),
+    "America/New_York",
+  ));
+
+  assert.equal(spring.length, 23);
+  assert.equal(fall.length, 25);
+  assert.equal(hours(spring[0]!.from, spring.at(-1)!.to), 23);
+  assert.equal(hours(fall[0]!.from, fall.at(-1)!.to), 25);
+  assert.equal(fall.filter((bucket) => bucket.label === "01:00").length, 2);
+});
+
 test("window construction rejects an invalid timezone and invalid instant", () => {
   assert.throws(
     () => createUsageWindow("day", instant("2026-09-02T10:00:00.000Z"), "Not/AZone"),
@@ -93,4 +128,26 @@ test("window construction rejects an invalid timezone and invalid instant", () =
       "code" in error &&
       error.code === "invalid-date",
   );
+});
+
+test("DST 2026-03-08 spring-forward uses 23 hours and skips 02:00", () => {
+  const nyDay = createUsageWindow("day", instant("2026-03-08T16:00:00.000Z"), "America/New_York");
+  assert.equal(nyDay.localDate, "2026-03-08");
+  // 2026-03-08 DST transition: clocks jump 02:00→03:00, so elapsed is 23h
+  assert.equal(hours(nyDay.from, nyDay.to), 23);
+  const buckets = createUsageTrendBuckets(nyDay);
+  assert.equal(buckets.length, 23);
+  assert.equal(buckets.some((b) => b.label === "02:00"), false);
+});
+
+test("ISO week Monday roll and DST-safe bounds for unified windows", () => {
+  const sunday = createUsageWindow("week", instant("2026-09-06T12:00:00.000Z"), "America/New_York");
+  const monday = createUsageWindow("week", instant("2026-09-07T12:00:00.000Z"), "America/New_York");
+  assert.notEqual(sunday.isoWeekLabel, monday.isoWeekLabel);
+  assert.equal(monday.isoWeekLabel, "2026-W37");
+  // Sunday week should end at Monday 00:00 local
+  assert.equal(sunday.to.toISOString(), monday.from.toISOString());
+  // Deterministic Monday buckets: 7 days
+  const buckets = createUsageTrendBuckets(monday);
+  assert.equal(buckets.length, 7);
 });

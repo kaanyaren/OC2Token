@@ -56,6 +56,22 @@ export function themeOrange(value: string, enabled: boolean, bright = false): st
   return paint(value, bright ? ANSI.orangeBright : ANSI.orange, enabled);
 }
 
+export function themeCyan(value: string, enabled: boolean, bright = false): string {
+  return paint(value, ANSI.cyan, enabled);
+}
+
+export function themeIn(value: string, enabled: boolean): string {
+  return paint(value, ANSI.cyan, enabled);
+}
+
+export function themeOut(value: string, enabled: boolean): string {
+  return paint(value, ANSI.orange, enabled);
+}
+
+export function themeCache(value: string, enabled: boolean): string {
+  return paint(value, ANSI.green, enabled);
+}
+
 export function statusColor(
   value: string,
   state: "complete" | "partial" | "stale",

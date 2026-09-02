@@ -40,7 +40,7 @@ export class RefreshScheduler {
   private readonly clock: Clock;
   private readonly onRequest: RefreshSchedulerOptions["onRequest"];
   private readonly timers: TimerDriver;
-  private readonly intervalMilliseconds: number;
+  private intervalMilliseconds: number;
   private running = false;
   private deadline: number | undefined;
   private timerHandle: unknown;
@@ -64,6 +64,21 @@ export class RefreshScheduler {
 
   get refreshIntervalSeconds(): number {
     return this.intervalMilliseconds / 1000;
+  }
+
+  setRefreshIntervalSeconds(seconds: number): void {
+    if (!Number.isFinite(seconds)) {
+      throw new RangeError("refreshIntervalSeconds must be finite");
+    }
+    if (seconds < 0 || !Number.isSafeInteger(seconds)) {
+      throw new RangeError("refreshIntervalSeconds must be a non-negative integer");
+    }
+    const nextMilliseconds = seconds * 1000;
+    if (nextMilliseconds === this.intervalMilliseconds) return;
+    this.intervalMilliseconds = nextMilliseconds;
+    if (this.running) {
+      this.resetDeadline();
+    }
   }
 
   get isRunning(): boolean {

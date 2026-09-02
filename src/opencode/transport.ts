@@ -8,6 +8,7 @@ import {
   type MessagePage,
   type OpenCodeAssistantMessage,
   type OpenCodeHealth,
+  type OpenCodeProject,
   type OpenCodeRange,
   type OpenCodeSession,
   type OpenCodeSessionStats,
@@ -17,6 +18,7 @@ import {
   type TokenComponentsInput,
   type TransportRequestOptions,
   type UsageBreakdown,
+  type UsageStatsRange,
   type UsageWindow,
 } from "../domain/index.js";
 import type { OpenCodeClientLike } from "./client.js";
@@ -354,7 +356,7 @@ function parseStatsBreakdowns(raw: Record<string, unknown>): {
   return { models, providers: [...providers.values()] };
 }
 
-function parseStats(value: unknown, window: UsageWindow): OpenCodeSessionStats {
+function parseStats(value: unknown, window: UsageStatsRange): OpenCodeSessionStats {
   const raw = unwrapData(value);
   if (!isRecord(raw) || !isRecord(raw.range)) {
     throw new DomainError("invalid-data", "OpenCode stats response is missing range");
@@ -424,10 +426,64 @@ function parseSession(value: unknown, index: number): OpenCodeSession {
   if (value.parentID !== undefined && value.parentID !== null && typeof value.parentID !== "string") {
     throw new DomainError("invalid-data", `sessions.data[${index}].parentID is invalid`);
   }
+  let projectID: string | undefined;
+  if (typeof value.projectID === "string" && value.projectID.length > 0) {
+    projectID = value.projectID;
+  } else if (typeof value.project === "string" && (value as Record<string, unknown>).project !== undefined) {
+    // fallback alias if API returns `project` instead of `projectID`
+    const raw = (value as Record<string, unknown>).project;
+    if (typeof raw === "string" && raw.length > 0) projectID = raw;
+  }
+  let directory: string | undefined;
+  let workspaceID: string | undefined;
+  const location = value.location;
+  if (isRecord(location)) {
+    if (typeof location.directory === "string" && location.directory.length > 0) {
+      directory = location.directory;
+    }
+    if (typeof location.workspaceID === "string" && location.workspaceID.length > 0) {
+      workspaceID = location.workspaceID;
+    } else if (typeof location.workspace === "string" && location.workspace.length > 0) {
+      workspaceID = location.workspace;
+    }
+  } else if (typeof value.directory === "string" && value.directory.length > 0) {
+    directory = value.directory;
+  }
   return {
     sessionID: value.id,
     ...(typeof value.parentID === "string" ? { parentSessionID: value.parentID } : {}),
+    ...(projectID === undefined ? {} : { projectID }),
+    ...(directory === undefined ? {} : { directory }),
+    ...(workspaceID === undefined ? {} : { workspaceID }),
   };
+}
+
+function parseProject(value: unknown, index: number): OpenCodeProject {
+  if (!isRecord(value) || typeof value.id !== "string" || value.id.length === 0) {
+    throw new DomainError("invalid-data", `projects.data[${index}] is missing id`);
+  }
+  if (typeof value.canonical !== "string" || value.canonical.length === 0) {
+    throw new DomainError("invalid-data", `projects.data[${index}] is missing canonical`);
+  }
+  const name = typeof value.name === "string" && value.name.length > 0 ? value.name : undefined;
+  return {
+    id: value.id,
+    canonical: value.canonical,
+    ...(name === undefined ? {} : { name }),
+  };
+}
+
+function parseProjectsEnvelope(value: unknown): ReadonlyArray<OpenCodeProject> {
+  if (Array.isArray(value)) {
+    return value.map(parseProject);
+  }
+  if (isRecord(value) && Array.isArray(value.data)) {
+    return (value.data as unknown[]).map(parseProject);
+  }
+  if (isRecord(value) && Array.isArray(value.projects)) {
+    return (value.projects as unknown[]).map(parseProject);
+  }
+  throw new DomainError("invalid-data", "OpenCode project list response is malformed");
 }
 
 function parseModel(value: unknown, path: string): string {
@@ -484,11 +540,11 @@ function requestInput(cursor: string | undefined, limit: number): Record<string,
 }
 
 export class StatsRangeMismatchError extends DomainError {
-  readonly requestedWindow: UsageWindow;
+  readonly requestedWindow: UsageStatsRange;
   readonly reportedRange: OpenCodeRange;
   readonly broader: boolean;
 
-  constructor(requestedWindow: UsageWindow, reportedRange: OpenCodeRange, broader: boolean) {
+  constructor(requestedWindow: UsageStatsRange, reportedRange: OpenCodeRange, broader: boolean) {
     super(
       "protocol",
       broader
@@ -536,7 +592,7 @@ export class OpenCode2Transport implements OpenCodeTransport {
     return { version: raw.version, fingerprint };
   }
 
-  async getSessionStats(window: UsageWindow, options: StatsRequestOptions = {}): Promise<OpenCodeSessionStats> {
+  async getSessionStats(window: UsageStatsRange, options: StatsRequestOptions = {}): Promise<OpenCodeSessionStats> {
     const input = {
       from: window.from.getTime(),
       to: window.to.getTime(),
@@ -630,6 +686,23 @@ export class OpenCode2Transport implements OpenCodeTransport {
       cursor = result.nextCursor;
     }
     throw new DomainError("protocol", "OpenCode message pagination exceeded its page bound");
+  }
+
+  async listProjects(options: TransportRequestOptions = {}): Promise<ReadonlyArray<OpenCodeProject>> {
+    const clientProject = (this.client as unknown as Record<string, unknown>).project as Record<string, unknown> | undefined;
+    if (clientProject === undefined || typeof clientProject.list !== "function") {
+      return [];
+    }
+    const raw = await retryingRead(
+      (signal) => (clientProject.list as (opts: unknown) => Promise<unknown>)({ signal }),
+      { ...this.retryPolicy, signal: options.signal },
+    );
+    try {
+      return parseProjectsEnvelope(raw);
+    } catch (error) {
+      if (error instanceof DomainError) throw error;
+      throw new DomainError("invalid-data", "OpenCode project list could not be parsed", { cause: error });
+    }
   }
 }
 

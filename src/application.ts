@@ -3,15 +3,35 @@ import { join } from "node:path";
 
 import {
   DomainError,
+  cancellationError,
+  containsInstant,
+  createUsageTrendBuckets,
   createUsageWindows,
+  isCancellationError,
+  sumUsageRecords,
+  toCollectionError,
   type CollectionRequest,
   type CollectionResult,
   type CollectionError,
   type Coverage,
   type StoredSnapshot,
   type UsageSource,
+  type ProviderKind,
+  type CollectionSource,
+  type UsageBreakdown,
+  type UsageBreakdownsByWindow,
+  type UsageTotals,
+  type UsageTotalsByWindow,
+  type UsageRecord,
+  type UsageTrendBucket,
+  type UsageTrendsByWindow,
+  type UsageWindowKind,
+  toUsageTotals,
 } from "./domain/index.js";
 import { collectUsageParallel, type CollectorOptions } from "./collector/index.js";
+import { UsageRecordReducer } from "./accounting/reducer.js";
+import { collectCodex } from "./codex/index.js";
+import { collectAntigravity } from "./antigravity/index.js";
 import {
   createNormalizedCacheStore,
   type NormalizedCacheStore,
@@ -51,6 +71,75 @@ function errorFor(error: unknown): CollectionError {
     message: error instanceof Error ? error.message : String(error),
     retryable: false,
   };
+}
+
+function addUsageTotals(left: UsageTotals, right: UsageTotals): UsageTotals {
+  return toUsageTotals({
+    input: left.input + right.input,
+    output: left.output + right.output,
+    reasoning: left.reasoning + right.reasoning,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+  });
+}
+
+function emptyUsageTotals(): UsageTotals {
+  return toUsageTotals({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+}
+
+function mergeBreakdowns(values: ReadonlyArray<UsageBreakdown>): ReadonlyArray<UsageBreakdown> {
+  const merged = new Map<string, UsageBreakdown>();
+  for (const value of values) {
+    const key = `${value.name}\0${value.provider ?? ""}`;
+    const current = merged.get(key);
+    merged.set(
+      key,
+      current === undefined
+        ? value
+        : { ...current, totals: addUsageTotals(current.totals, value.totals) },
+    );
+  }
+  return [...merged.values()].sort(
+    (left, right) => right.totals.recorded_total - left.totals.recorded_total || left.name.localeCompare(right.name),
+  );
+}
+
+function mergeTrends(
+  successful: ReadonlyArray<{ readonly provider: ProviderKind; readonly result: CollectionResult }>,
+  request: CollectionRequest,
+): UsageTrendsByWindow | undefined {
+  if (successful.length === 0) return undefined;
+
+  const merged: Partial<Record<UsageWindowKind, readonly UsageTrendBucket[]>> = {};
+  for (const window of request.windows) {
+    const planned = createUsageTrendBuckets(window);
+    const buckets: UsageTrendBucket[] = planned.map((bucket, index) => {
+      let totals = emptyUsageTotals();
+      for (const { result } of successful) {
+        const supplied = result.trendsByWindow?.[window.kind]?.[index];
+        const exact = supplied !== undefined &&
+          supplied.from.getTime() === bucket.from.getTime() &&
+          supplied.to.getTime() === bucket.to.getTime();
+        const sourceTotals = exact
+          ? supplied.totals
+          : sumUsageRecords(result.records, {
+              ...window,
+              from: new Date(bucket.from.getTime()),
+              to: new Date(bucket.to.getTime()),
+              label: bucket.label,
+            });
+        totals = addUsageTotals(totals, sourceTotals);
+      }
+      return {
+        label: bucket.label,
+        from: new Date(bucket.from.getTime()),
+        to: new Date(bucket.to.getTime()),
+        totals,
+      };
+    });
+    merged[window.kind] = buckets;
+  }
+  return merged as UsageTrendsByWindow;
 }
 
 /**
@@ -139,12 +228,394 @@ export class HybridUsageSource implements UsageSource {
   }
 }
 
+export class CodexFileSource implements UsageSource {
+  constructor(private readonly directory?: string) {}
+
+  async collect(request: CollectionRequest): Promise<CollectionResult> {
+    if (request.signal?.aborted) throw cancellationError();
+    if (this.directory !== undefined) {
+      const previous = process.env.CODEX_HOME;
+      process.env.CODEX_HOME = this.directory;
+      try {
+        return await collectCodex(request);
+      } finally {
+        if (previous === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previous;
+      }
+    }
+    return collectCodex(request);
+  }
+}
+
+export class AntigravityFileSource implements UsageSource {
+  constructor(private readonly directory?: string) {}
+
+  async collect(request: CollectionRequest): Promise<CollectionResult> {
+    if (request.signal?.aborted) throw cancellationError();
+    if (this.directory !== undefined) {
+      const previous = process.env.ANTIGRAVITY_HOME;
+      process.env.ANTIGRAVITY_HOME = this.directory;
+      try {
+        return await collectAntigravity(request);
+      } finally {
+        if (previous === undefined) delete process.env.ANTIGRAVITY_HOME;
+        else process.env.ANTIGRAVITY_HOME = previous;
+      }
+    }
+    return collectAntigravity(request);
+  }
+}
+
+export interface UnifiedUsageSourceOptions {
+  readonly filterProviders?: Set<ProviderKind>;
+}
+
+export class UnifiedUsageSource implements UsageSource {
+  private filterProviders: Set<ProviderKind> | undefined;
+
+  constructor(
+    readonly opencode: UsageSource,
+    readonly codex: UsageSource,
+    readonly antigravity: UsageSource,
+    options: UnifiedUsageSourceOptions = {},
+  ) {
+    this.filterProviders = options.filterProviders === undefined || options.filterProviders.size === 0
+      ? undefined
+      : new Set(options.filterProviders);
+  }
+
+  getFilterProviders(): Set<ProviderKind> | undefined {
+    return this.filterProviders === undefined ? undefined : new Set(this.filterProviders);
+  }
+
+  setFilterProviders(filter?: Set<ProviderKind>): void {
+    if (filter === undefined || filter.size === 0) {
+      this.filterProviders = undefined;
+    } else {
+      this.filterProviders = new Set(filter);
+    }
+  }
+
+  async collect(request: CollectionRequest): Promise<CollectionResult> {
+    if (request.signal?.aborted) {
+      throw cancellationError(
+        request.signal.reason instanceof Error ? request.signal.reason.message : undefined,
+      );
+    }
+    if (request.windows.length === 0) {
+      throw new DomainError("invalid-window", "Collection request must contain at least one usage window");
+    }
+
+    const filter = this.filterProviders;
+    const shouldCollect = (provider: ProviderKind): boolean =>
+      filter === undefined || filter.size === 0 || filter.has(provider);
+
+    type Task = { provider: ProviderKind; source: UsageSource };
+    const tasks: Task[] = [];
+    if (shouldCollect("opencode")) tasks.push({ provider: "opencode", source: this.opencode });
+    if (shouldCollect("codex")) tasks.push({ provider: "codex", source: this.codex });
+    if (shouldCollect("antigravity")) tasks.push({ provider: "antigravity", source: this.antigravity });
+
+    if (tasks.length === 0) {
+      const emptyRecords: ReadonlyArray<UsageRecord> = [];
+      const totalsByWindow: UsageTotalsByWindow = Object.fromEntries(
+        request.windows.map((w) => [w.kind, sumUsageRecords(emptyRecords, w)]),
+      );
+      return {
+        capturedAt: new Date(request.capturedAt.getTime()),
+        windows: request.windows.map((w) => ({
+          ...w,
+          from: new Date(w.from.getTime()),
+          to: new Date(w.to.getTime()),
+        })),
+        source: "unified",
+        records: emptyRecords,
+        totalsByWindow,
+        coverage: {
+          complete: true,
+          sessionsDiscovered: 0,
+          sessionsScanned: 0,
+          sessionsSkipped: 0,
+          pagesRead: 0,
+          jobsRetried: 0,
+          provisionalMessages: 0,
+          errors: [],
+        },
+      };
+    }
+
+    const promises = tasks.map((task) => task.source.collect(request));
+    const results = await Promise.allSettled(promises);
+
+    for (const result of results) {
+      if (result.status === "rejected" && isCancellationError(result.reason)) {
+        throw result.reason instanceof DomainError
+          ? result.reason
+          : cancellationError(result.reason instanceof Error ? result.reason.message : undefined);
+      }
+    }
+    if (request.signal?.aborted) {
+      throw cancellationError(
+        request.signal.reason instanceof Error ? request.signal.reason.message : undefined,
+      );
+    }
+
+    const reducer = new UsageRecordReducer();
+    let sessionsDiscovered = 0;
+    let sessionsScanned = 0;
+    let sessionsSkipped = 0;
+    let pagesRead = 0;
+    let jobsRetried = 0;
+    let provisionalMessages = 0;
+    let overallComplete = true;
+    const prefixedErrors: CollectionError[] = [];
+    const successful: Array<{ provider: ProviderKind; result: CollectionResult }> = [];
+
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i]!;
+      const settled = results[i]!;
+      if (settled.status === "fulfilled") {
+        const result = settled.value;
+        successful.push({ provider: task.provider, result });
+        const cov = result.coverage;
+        sessionsDiscovered += cov.sessionsDiscovered;
+        sessionsScanned += cov.sessionsScanned;
+        sessionsSkipped += cov.sessionsSkipped;
+        pagesRead += cov.pagesRead;
+        jobsRetried += cov.jobsRetried;
+        provisionalMessages += cov.provisionalMessages;
+        if (!cov.complete) overallComplete = false;
+        for (const err of cov.errors) {
+          prefixedErrors.push({
+            ...err,
+            message: `[${task.provider}] ${err.message}`,
+          });
+        }
+        reducer.upsertMany(result.records);
+      } else {
+        overallComplete = false;
+        const raw = settled.reason;
+        const base = toCollectionError(raw, "unknown");
+        prefixedErrors.push({
+          ...base,
+          message: `[${task.provider}] ${base.message}`,
+        });
+      }
+    }
+
+    const sortedErrors = [...prefixedErrors].sort((a, b) =>
+      (String(a.sessionID ?? "") + "\0" + a.code + "\0" + a.message).localeCompare(
+        String(b.sessionID ?? "") + "\0" + b.code + "\0" + b.message,
+      ),
+    );
+
+    const coverage: Coverage = {
+      complete: overallComplete && sortedErrors.length === 0,
+      sessionsDiscovered,
+      sessionsScanned,
+      sessionsSkipped,
+      pagesRead,
+      jobsRetried,
+      provisionalMessages,
+      errors: sortedErrors,
+    };
+
+    let records = reducer.records();
+    records = [...records].sort((a, b) => {
+      const providerCompare = a.provider.localeCompare(b.provider);
+      if (providerCompare !== 0) return providerCompare;
+      return a.key.localeCompare(b.key);
+    });
+
+    const totalsByWindow: UsageTotalsByWindow = Object.fromEntries(
+      request.windows.map((w) => {
+        const totals = successful.reduce((current, { result }) => {
+          const sourceTotals = result.totalsByWindow[w.kind] ?? sumUsageRecords(result.records, w);
+          return addUsageTotals(current, sourceTotals);
+        }, emptyUsageTotals());
+        return [w.kind, totals];
+      }),
+    );
+
+    const providersMutable: Record<string, ReadonlyArray<UsageBreakdown>> = {};
+    const modelsMutable: Record<string, ReadonlyArray<UsageBreakdown>> = {};
+    const projectsMutable: Record<string, ReadonlyArray<UsageBreakdown>> = {};
+
+    for (const w of request.windows) {
+      const windowRecords = records.filter((r) => containsInstant(w, r.createdAt));
+      if (windowRecords.length > 0) {
+        const byProvider = new Map<ProviderKind, UsageRecord[]>();
+        const byModel = new Map<string, UsageRecord[]>();
+        const byProject = new Map<string, UsageRecord[]>();
+        for (const r of windowRecords) {
+          const prov = r.provider;
+          const arrP = byProvider.get(prov);
+          if (arrP === undefined) byProvider.set(prov, [r]);
+          else arrP.push(r);
+
+          const modelName = r.model;
+          const arrM = byModel.get(modelName);
+          if (arrM === undefined) byModel.set(modelName, [r]);
+          else arrM.push(r);
+
+          if (r.project !== undefined && r.project.trim().length > 0) {
+            const proj = r.project;
+            const arrJ = byProject.get(proj);
+            if (arrJ === undefined) byProject.set(proj, [r]);
+            else arrJ.push(r);
+          }
+        }
+
+        if (byProvider.size > 0) {
+          const breakdowns: UsageBreakdown[] = [];
+          for (const [provName, recs] of byProvider.entries()) {
+            const totals = sumUsageRecords(recs, w);
+            breakdowns.push({ name: provName, provider: provName, totals });
+          }
+          breakdowns.sort(
+            (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
+          );
+          providersMutable[w.kind] = breakdowns;
+        }
+
+        if (byModel.size > 0) {
+          const breakdowns: UsageBreakdown[] = [];
+          for (const [modelName, recs] of byModel.entries()) {
+            const totals = sumUsageRecords(recs, w);
+            breakdowns.push({ name: modelName, totals });
+          }
+          breakdowns.sort(
+            (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
+          );
+          modelsMutable[w.kind] = breakdowns;
+        }
+
+        if (byProject.size > 0) {
+          const breakdowns: UsageBreakdown[] = [];
+          for (const [projName, recs] of byProject.entries()) {
+            const totals = sumUsageRecords(recs, w);
+            breakdowns.push({ name: projName, totals });
+          }
+          breakdowns.sort(
+            (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
+          );
+          projectsMutable[w.kind] = breakdowns;
+        }
+      }
+
+      const suppliedProviders = successful.flatMap(({ result }) => result.providersByWindow?.[w.kind] ?? []);
+      if (suppliedProviders.length > 0) {
+        providersMutable[w.kind] = mergeBreakdowns([
+          ...(providersMutable[w.kind] ?? []),
+          ...suppliedProviders,
+        ]);
+      }
+      const suppliedModels = successful.flatMap(({ result }) => result.modelsByWindow?.[w.kind] ?? []);
+      if (suppliedModels.length > 0) {
+        modelsMutable[w.kind] = mergeBreakdowns([
+          ...(modelsMutable[w.kind] ?? []),
+          ...suppliedModels,
+        ]);
+      }
+      const suppliedProjects = successful.flatMap(({ result }) => result.projectsByWindow?.[w.kind] ?? []);
+      if (suppliedProjects.length > 0) {
+        projectsMutable[w.kind] = mergeBreakdowns([
+          ...(projectsMutable[w.kind] ?? []),
+          ...suppliedProjects,
+        ]);
+      }
+    }
+
+    const providersByWindow: UsageBreakdownsByWindow = providersMutable;
+    const modelsByWindow: UsageBreakdownsByWindow = modelsMutable;
+    const projectsByWindow: UsageBreakdownsByWindow = projectsMutable;
+
+    const presentProviders = new Set(records.map((r) => r.provider));
+    let source: CollectionSource;
+    if (presentProviders.size > 1) {
+      source = "unified";
+    } else if (presentProviders.size === 1) {
+      const sole = [...presentProviders][0]!;
+      if (sole === "codex") source = "codex";
+      else if (sole === "antigravity") source = "antigravity";
+      else {
+        const opencodeResult = successful.find((s) => s.provider === "opencode");
+        source = opencodeResult?.result.source ?? "message-scan";
+      }
+    } else {
+      if (tasks.length > 1) {
+        const distinctSources = new Set(successful.map((s) => s.result.source));
+        if (distinctSources.size === 1) {
+          const soleSource = [...distinctSources][0]!;
+          source = tasks.length > 1 ? "unified" : soleSource;
+        } else {
+          source = "unified";
+        }
+      } else if (tasks.length === 1) {
+        const soleTask = tasks[0]!;
+        if (soleTask.provider === "codex") source = "codex";
+        else if (soleTask.provider === "antigravity") source = "antigravity";
+        else {
+          const opencodeResult = successful.find((s) => s.provider === "opencode");
+          source = opencodeResult?.result.source ?? "message-scan";
+        }
+      } else {
+        source = "unified";
+      }
+    }
+
+    const opencodeSuccess = successful.find((s) => s.provider === "opencode");
+    const serverFingerprint = opencodeSuccess?.result.serverFingerprint;
+    const serverVersion = opencodeSuccess?.result.serverVersion;
+    const trendsByWindow = mergeTrends(successful, request);
+
+    return {
+      capturedAt: new Date(request.capturedAt.getTime()),
+      windows: request.windows.map((w) => ({
+        ...w,
+        from: new Date(w.from.getTime()),
+        to: new Date(w.to.getTime()),
+      })),
+      source,
+      records,
+      totalsByWindow,
+      ...(Object.keys(providersMutable).length > 0
+        ? { providersByWindow, providers: [...(providersMutable.week ?? providersMutable.day ?? providersMutable.hour ?? Object.values(providersMutable).flat())] }
+        : {}),
+      ...(Object.keys(modelsMutable).length > 0
+        ? { modelsByWindow, models: [...(modelsMutable.week ?? modelsMutable.day ?? modelsMutable.hour ?? Object.values(modelsMutable).flat())] }
+        : {}),
+      ...(Object.keys(projectsMutable).length > 0
+        ? { projectsByWindow, projects: [...(projectsMutable.week ?? projectsMutable.day ?? projectsMutable.hour ?? Object.values(projectsMutable).flat())] }
+        : {}),
+      ...(trendsByWindow === undefined ? {} : { trendsByWindow }),
+      coverage,
+      ...(serverFingerprint === undefined ? {} : { serverFingerprint }),
+      ...(serverVersion === undefined ? {} : { serverVersion }),
+    };
+  }
+}
+
 /** Persist successful normalized metadata without making the cache a source of truth. */
 export class CachedUsageSource implements UsageSource {
   constructor(
     readonly source: UsageSource,
     readonly store: NormalizedCacheStore,
   ) {}
+
+  getFilterProviders(): Set<ProviderKind> | undefined {
+    const inner = this.source as unknown as { getFilterProviders?: () => Set<ProviderKind> | undefined };
+    return inner.getFilterProviders?.();
+  }
+
+  setFilterProviders(filter?: Set<ProviderKind>): void {
+    const inner = this.source as unknown as { setFilterProviders?: (filter?: Set<ProviderKind>) => void };
+    inner.setFilterProviders?.(filter);
+  }
+
+  get innerSource(): UsageSource {
+    return this.source;
+  }
 
   async collect(request: CollectionRequest): Promise<CollectionResult> {
     const result = await this.source.collect(request);
@@ -158,8 +629,11 @@ export class CachedUsageSource implements UsageSource {
       totalsByWindow: result.totalsByWindow,
       ...(result.models === undefined ? {} : { models: result.models }),
       ...(result.providers === undefined ? {} : { providers: result.providers }),
+      ...(result.projects === undefined ? {} : { projects: result.projects }),
       ...(result.modelsByWindow === undefined ? {} : { modelsByWindow: result.modelsByWindow }),
       ...(result.providersByWindow === undefined ? {} : { providersByWindow: result.providersByWindow }),
+      ...(result.projectsByWindow === undefined ? {} : { projectsByWindow: result.projectsByWindow }),
+      ...(result.trendsByWindow === undefined ? {} : { trendsByWindow: result.trendsByWindow }),
       coverage: result.coverage,
       ...(result.serverFingerprint === undefined ? {} : { serverFingerprint: result.serverFingerprint }),
       ...(result.serverVersion === undefined ? {} : { serverVersion: result.serverVersion }),
@@ -210,8 +684,11 @@ export async function readCachedSnapshot(
       totalsByWindow: snapshot.totalsByWindow,
       ...(snapshot.models === undefined ? {} : { models: snapshot.models }),
       ...(snapshot.providers === undefined ? {} : { providers: snapshot.providers }),
+      ...(snapshot.projects === undefined ? {} : { projects: snapshot.projects }),
       ...(snapshot.modelsByWindow === undefined ? {} : { modelsByWindow: snapshot.modelsByWindow }),
       ...(snapshot.providersByWindow === undefined ? {} : { providersByWindow: snapshot.providersByWindow }),
+      ...(snapshot.projectsByWindow === undefined ? {} : { projectsByWindow: snapshot.projectsByWindow }),
+      ...(snapshot.trendsByWindow === undefined ? {} : { trendsByWindow: snapshot.trendsByWindow }),
       coverage: snapshot.coverage,
       ...(snapshot.serverFingerprint === undefined ? {} : { serverFingerprint: snapshot.serverFingerprint }),
       ...(snapshot.serverVersion === undefined ? {} : { serverVersion: snapshot.serverVersion }),
@@ -260,15 +737,24 @@ export function emptyCollectionResult(now: Date, timezone: string): CollectionRe
 export interface ApplicationOptions extends OpenCodeAdapterOptions {
   readonly cacheDirectory?: string;
   readonly collectorOptions?: CollectorOptions;
+  readonly codexDirectory?: string;
+  readonly antigravityDirectory?: string;
+  readonly filterProviders?: Set<ProviderKind>;
 }
 
 export function createApplicationSource(options: ApplicationOptions = {}): {
   readonly adapter: OpenCode2Adapter;
+  readonly unified: UnifiedUsageSource;
   readonly source: CachedUsageSource;
   readonly store: NormalizedCacheStore;
 } {
   const adapter = createOpenCodeAdapter(options);
   const hybrid = new HybridUsageSource(adapter, options.collectorOptions);
+  const codexSource = new CodexFileSource(options.codexDirectory);
+  const antigravitySource = new AntigravityFileSource(options.antigravityDirectory);
+  const unifiedOptions =
+    options.filterProviders === undefined ? undefined : { filterProviders: options.filterProviders };
+  const unified = new UnifiedUsageSource(hybrid, codexSource, antigravitySource, unifiedOptions);
   const store = createNormalizedCacheStore({ directory: options.cacheDirectory ?? defaultCacheDirectory() });
-  return { adapter, source: new CachedUsageSource(hybrid, store), store };
+  return { adapter, unified, source: new CachedUsageSource(unified, store), store };
 }

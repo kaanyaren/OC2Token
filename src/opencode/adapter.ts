@@ -10,7 +10,7 @@ import {
   type SessionListRequest,
   type SessionPage,
   type UsageSource,
-  type UsageWindow,
+  type UsageStatsRange,
 } from "../domain/index.js";
 import {
   connectOpenCode,
@@ -115,7 +115,7 @@ export class OpenCode2Adapter implements UsageSource {
     return this.requireTransport().getHealth(options);
   }
 
-  getSessionStats(window: UsageWindow, options: StatsRequestOptions = {}): Promise<OpenCodeSessionStats> {
+  getSessionStats(window: UsageStatsRange, options: StatsRequestOptions = {}): Promise<OpenCodeSessionStats> {
     const transport = this.requireTransport();
     if (transport instanceof OpenCode2Transport) return transport.getSessionStats(window, options);
     return transport.getSessionStats(window, options);

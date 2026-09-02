@@ -170,6 +170,20 @@ export class RefreshCoordinator<
     this.emit();
   }
 
+  get refreshIntervalSeconds(): number {
+    return (this.scheduler as unknown as { refreshIntervalSeconds?: number }).refreshIntervalSeconds
+      ?? this.scheduler.refreshIntervalSeconds
+      ?? 0;
+  }
+
+  setRefreshIntervalSeconds(seconds: number): void {
+    if (this.scheduler.setRefreshIntervalSeconds === undefined) {
+      throw new Error("Scheduler does not support dynamic interval updates");
+    }
+    this.scheduler.setRefreshIntervalSeconds(seconds);
+    this.emit();
+  }
+
   /** Start the scheduler and immediately issue exactly one initial refresh. */
   start(): Promise<RefreshOutcome> {
     if (this.started) {

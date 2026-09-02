@@ -10,8 +10,10 @@ import {
 } from "./client.js";
 import { isStatsRangeMismatch, OpenCode2Transport, type StatsRequestOptions } from "./transport.js";
 
+export type DoctorCheckName = "service" | "health" | "stats-range" | "opencode" | "codex" | "antigravity";
+
 export interface DoctorCheck {
-  readonly name: "service" | "health" | "stats-range";
+  readonly name: DoctorCheckName;
   readonly ok: boolean;
   readonly message: string;
 }

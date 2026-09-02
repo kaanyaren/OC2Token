@@ -85,4 +85,6 @@ export interface RefreshSchedulerLike {
   wake(): void;
   countdownSeconds(): number | undefined;
   nextRefreshAt(): number | undefined;
+  readonly refreshIntervalSeconds?: number;
+  setRefreshIntervalSeconds?(seconds: number): void;
 }

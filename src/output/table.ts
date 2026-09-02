@@ -7,7 +7,6 @@ import {
 import {
   formatCoverage,
   formatExactTokenCount,
-  formatTokenBreakdown,
   safeIdentifier,
 } from "../dashboard/render/format.js";
 
@@ -24,15 +23,19 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
       ? `${safeIdentifier(item.provider)}/${safeIdentifier(item.name)}`
       : safeIdentifier(item.name),
     formatExactTokenCount(item.totals.recorded_total),
-    formatTokenBreakdown(item.totals),
+    formatExactTokenCount(item.totals.input),
+    formatExactTokenCount(item.totals.output + item.totals.reasoning),
+    formatExactTokenCount(item.totals.cacheRead + item.totals.cacheWrite),
   ]);
   const widths = [
     Math.max("Name".length, ...rows.map((row) => row[0].length)),
     Math.max("Recorded".length, ...rows.map((row) => row[1].length)),
-    Math.max("Components".length, ...rows.map((row) => row[2].length)),
+    Math.max("In".length, ...rows.map((row) => row[2].length)),
+    Math.max("Out".length, ...rows.map((row) => row[3].length)),
+    Math.max("Cache".length, ...rows.map((row) => row[4].length)),
   ];
-  lines.push(tableRow(["Name", "Recorded", "Components"], widths));
-  lines.push(tableRow(["----", "--------", "----------"], widths));
+  lines.push(tableRow(["Name", "Recorded", "In", "Out", "Cache"], widths));
+  lines.push(tableRow(widths.map((width) => "-".repeat(width)), widths));
   lines.push(...rows.map((row) => tableRow(row, widths)));
   if (values.length > rows.length) lines.push(`  +${values.length - rows.length} more`);
   return lines;
@@ -42,7 +45,7 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
 export function renderTable(input: DashboardSnapshotInput): string {
   const snapshot = normalizeDashboardSnapshot(input);
   const rows: string[][] = [
-    ["Window", "Recorded", "Input", "Output", "Reasoning", "Cache read", "Cache write"],
+    ["Window", "Recorded", "In", "Out", "Cache"],
   ];
   for (const kind of allWindowKinds()) {
     const totals = snapshot.windows[kind].totals;
@@ -50,10 +53,8 @@ export function renderTable(input: DashboardSnapshotInput): string {
       kind === "hour" ? "Last hour" : kind === "day" ? "Today" : "This week",
       formatExactTokenCount(totals.recorded_total),
       formatExactTokenCount(totals.input),
-      formatExactTokenCount(totals.output),
-      formatExactTokenCount(totals.reasoning),
-      formatExactTokenCount(totals.cacheRead),
-      formatExactTokenCount(totals.cacheWrite),
+      formatExactTokenCount(totals.output + totals.reasoning),
+      formatExactTokenCount(totals.cacheRead + totals.cacheWrite),
     ]);
   }
   const widths = rows[0].map((_, column) =>
@@ -64,9 +65,17 @@ export function renderTable(input: DashboardSnapshotInput): string {
     : snapshot.coverage.complete
       ? "COMPLETE"
       : "PARTIAL";
+  // Unified source is explicit when multiple providers contribute; normalize ensures "unified" even for legacy snapshots
+  const displaySource = snapshot.providers.length > 1 ? "unified" : snapshot.source;
+  const sortedProviders = [...snapshot.providers].sort(
+    (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
+  );
+  const sortedProjects = [...snapshot.projects].sort(
+    (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
+  );
   const lines = [
     "OpenCode 2 Token Usage",
-    `Source: ${safeIdentifier(snapshot.source)}  Version: ${safeIdentifier(snapshot.version)}`,
+    `Source: ${safeIdentifier(displaySource)}  Version: ${safeIdentifier(snapshot.version)}`,
     `Status: ${status}  Coverage: ${formatCoverage(snapshot.coverage, snapshot.stale)}`,
     "",
     tableRow(rows[0], widths),
@@ -75,7 +84,9 @@ export function renderTable(input: DashboardSnapshotInput): string {
     "",
     ...renderSection("Models", snapshot.models),
     "",
-    ...renderSection("Providers", snapshot.providers),
+    ...renderSection("Providers", sortedProviders),
+    "",
+    ...renderSection("Projects", sortedProjects),
   ];
   return lines.join("\n");
 }

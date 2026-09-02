@@ -327,12 +327,33 @@ function isExplicitlyProvisional(message: AssistantMessage): boolean {
   );
 }
 
+function projectForSession(session: SessionSummary): string | undefined {
+  const direct = (session as Record<string, unknown>).project as unknown;
+  if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
+  const pid = session.projectID;
+  if (typeof pid === "string" && pid.trim().length > 0) {
+    // Prefer directory when available for human readability, otherwise projectID
+    const dir = session.directory;
+    if (typeof dir === "string" && dir.trim().length > 0) return dir.trim();
+    return pid.trim();
+  }
+  const dir = session.directory;
+  if (typeof dir === "string" && dir.trim().length > 0) return dir.trim();
+  const location = (session as Record<string, unknown>).location as unknown;
+  if (location !== null && typeof location === "object") {
+    const loc = location as Record<string, unknown>;
+    if (typeof loc.directory === "string" && (loc.directory as string).trim().length > 0) return (loc.directory as string).trim();
+  }
+  return undefined;
+}
+
 function normalizeAssistantMessage(
   message: AssistantMessage,
   sessionID: string,
   observedAt: Date,
   interval: UsageInterval,
   observationOrdinal: number,
+  project?: string,
 ): NormalizedMessage {
   const type = messageType(message);
   if (type !== undefined && type !== "assistant") return { provisional: false };
@@ -391,6 +412,7 @@ function normalizeAssistantMessage(
         observedAt,
         completeness,
         tokenRevision,
+        ...(project === undefined ? {} : { project }),
       }),
     };
   } catch (error) {
@@ -479,6 +501,7 @@ async function scanSession(
   options: ResolvedOptions,
 ): Promise<ScanOutcome> {
   const sessionID = sessionIDOf(session);
+  const project = projectForSession(session);
   const records: UsageRecord[] = [];
   const errors: CollectionError[] = [];
   let pagesRead = 0;
@@ -514,6 +537,7 @@ async function scanSession(
           observedAt,
           interval,
           observationOrdinal,
+          project,
         );
         observationOrdinal += 1;
         if (normalizedMessage.provisional) provisionalMessages += 1;
@@ -666,6 +690,34 @@ async function collectInternal(
     errors,
   };
 
+  // Project breakdowns per window (derived from records, similar to provider/model logic in UnifiedUsageSource)
+  const projectsMutable: Record<string, ReadonlyArray<import("../domain/index.js").UsageBreakdown>> = {};
+  for (const w of request.windows) {
+    const windowRecords = records.filter((r) => r.project !== undefined && r.project.trim().length > 0 && (() => {
+      // containsInstant check
+      const t = r.createdAt.getTime();
+      return t >= w.from.getTime() && t < w.to.getTime();
+    })());
+    if (windowRecords.length === 0) continue;
+    const byProject = new Map<string, typeof windowRecords>();
+    for (const r of windowRecords) {
+      const proj = r.project!;
+      const arr = byProject.get(proj);
+      if (arr === undefined) byProject.set(proj, [r]);
+      else arr.push(r);
+    }
+    if (byProject.size > 0) {
+      const breakdowns: import("../domain/index.js").UsageBreakdown[] = [];
+      for (const [projName, recs] of byProject.entries()) {
+        const totals = sumUsageRecords(recs, w, { includeProvisional: request.includeProvisional === true });
+        breakdowns.push({ name: projName, totals });
+      }
+      breakdowns.sort((a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name));
+      projectsMutable[w.kind] = breakdowns;
+    }
+  }
+  const maybeProjects = Object.keys(projectsMutable).length > 0 ? { projectsByWindow: projectsMutable as import("../domain/index.js").UsageBreakdownsByWindow, projects: [...(projectsMutable.week ?? projectsMutable.day ?? projectsMutable.hour ?? Object.values(projectsMutable).flat())] } : {};
+
   return {
     capturedAt: observedAt,
     windows: request.windows.map((window) => ({
@@ -681,6 +733,7 @@ async function collectInternal(
         sumUsageRecords(records, window, { includeProvisional: request.includeProvisional === true }),
       ]),
     ),
+    ...maybeProjects,
     coverage: finalCoverage,
   };
 }

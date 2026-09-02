@@ -7,8 +7,24 @@ import {
   type TokenComponents,
   type UsageTotals,
 } from "./tokens.js";
+import type { ProviderKind } from "./contracts.js";
 
 export type UsageRecordCompleteness = "final" | "provisional";
+
+export const PROVIDER_KINDS = ["opencode", "codex", "antigravity"] as const;
+
+export function isProviderKind(value: unknown): value is ProviderKind {
+  return (
+    typeof value === "string" &&
+    (PROVIDER_KINDS as readonly string[]).includes(value)
+  );
+}
+
+function assertProviderKind(value: unknown, field: string): asserts value is ProviderKind {
+  if (!isProviderKind(value)) {
+    throw new DomainError("invalid-usage-record", `${field} must be one of ${PROVIDER_KINDS.join(", ")}`);
+  }
+}
 
 export interface UsageRecordInput {
   readonly sessionID: string;
@@ -18,8 +34,12 @@ export interface UsageRecordInput {
   readonly tokens: TokenComponents;
   readonly observedAt: Date;
   readonly completeness: UsageRecordCompleteness;
+  /** Provider that produced this record. Defaults to "opencode" for back-compat when omitted. */
+  readonly provider?: ProviderKind;
   /** Adapters may supply a provider revision; otherwise a deterministic value is derived. */
   readonly tokenRevision?: string;
+  /** Project that produced this record (directory or projectID). Optional for back-compat. */
+  readonly project?: string;
 }
 
 /** Canonical normalized usage-bearing assistant message. */
@@ -34,6 +54,9 @@ export interface UsageRecord extends TokenComponents {
   readonly tokenRevision: string;
   readonly observedAt: Date;
   readonly completeness: UsageRecordCompleteness;
+  readonly provider: ProviderKind;
+  /** Project that produced this record (directory or projectID). Undefined for non-opencode or legacy records. */
+  readonly project?: string;
 }
 
 function assertNonEmpty(value: string, field: string): void {
@@ -58,6 +81,22 @@ function assertDate(value: Date, field: string): void {
   }
 }
 
+function assertProject(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new DomainError("invalid-usage-record", "project must be a string when present");
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.length > 1024) {
+    throw new DomainError("invalid-usage-record", "project must be 1..1024 characters");
+  }
+  if (/[\u0000-\u001f]/.test(trimmed)) {
+    throw new DomainError("invalid-usage-record", "project must not contain control characters");
+  }
+  return trimmed;
+}
+
 /**
  * The default revision is deliberately deterministic and content-addressed.
  * A later observation of the same message with different tokens therefore
@@ -79,7 +118,13 @@ export function tokenRevisionFor(
   ].join(":");
 }
 
-/** Return the stable idempotency key used by cache reducers and retries. */
+/**
+ * Return the stable idempotency key used by cache reducers and retries.
+ * The key is `sessionID/messageID` only; `provider` is metadata and not part
+ * of the key. Cross-provider collisions are impossible in practice because
+ * each provider prefixes distinct session/message IDs (e.g. Codex rollout
+ * path vs Antigravity cascadeId).
+ */
 export function usageRecordKey(sessionID: string, messageID: string): string {
   assertRecordID(sessionID, "sessionID");
   assertRecordID(messageID, "messageID");
@@ -100,11 +145,20 @@ export function createUsageRecord(input: UsageRecordInput): UsageRecord {
   }
   assertDate(input.createdAt, "createdAt");
   assertDate(input.observedAt, "observedAt");
+  let provider: ProviderKind;
+  if (input.provider === undefined) {
+    provider = "opencode";
+  } else {
+    assertNonEmpty(input.provider, "provider");
+    assertProviderKind(input.provider, "provider");
+    provider = input.provider;
+  }
 
   const tokens = parseTokenComponents(input.tokens);
   const recordedTotal = recorded_total(tokens);
   const tokenRevision = input.tokenRevision ?? tokenRevisionFor(tokens, input.completeness);
   assertNonEmpty(tokenRevision, "tokenRevision");
+  const project = assertProject(input.project);
 
   return {
     key: usageRecordKey(input.sessionID, input.messageID),
@@ -117,6 +171,8 @@ export function createUsageRecord(input: UsageRecordInput): UsageRecord {
     tokenRevision,
     observedAt: new Date(input.observedAt.getTime()),
     completeness: input.completeness,
+    provider,
+    ...(project === undefined ? {} : { project }),
   };
 }
 

@@ -8,10 +8,12 @@ import {
   CachedUsageSource,
   HybridUsageSource,
   newCollectionRequest,
+  UnifiedUsageSource,
 } from "../../src/application.js";
 import { CacheLock, NormalizedCacheStore } from "../../src/cache/index.js";
 import {
   createUsageRecord,
+  createUsageTrendBuckets,
   createUsageWindows,
   toUsageTotals,
   type CollectionRequest,
@@ -77,6 +79,7 @@ function assistant(
 
 class HybridFixtureTransport implements OpenCodeTransport {
   readonly statsCalls: UsageWindowKind[] = [];
+  readonly trendCalls: UsageWindowKind[] = [];
   readonly sessionCalls: number[] = [];
   readonly messageCalls: string[] = [];
 
@@ -87,15 +90,19 @@ class HybridFixtureTransport implements OpenCodeTransport {
   }
 
   async getSessionStats(window: UsageWindow): Promise<OpenCodeSessionStats> {
-    this.statsCalls.push(window.kind);
-    if (window.kind === this.ignoreStatsAt) {
+    const aggregate = createUsageWindows(NOW, window.timezone)[window.kind];
+    const isAggregate = aggregate.from.getTime() === window.from.getTime() &&
+      aggregate.to.getTime() === window.to.getTime();
+    if (isAggregate) this.statsCalls.push(window.kind);
+    else this.trendCalls.push(window.kind);
+    if (isAggregate && window.kind === this.ignoreStatsAt) {
       throw new StatsRangeMismatchError(
         window,
         { from: new Date(0), to: new Date(NOW.getTime() + 1), timezone: window.timezone },
         true,
       );
     }
-    return exactStats(window, 100 + this.statsCalls.length);
+    return exactStats(window, isAggregate ? 100 + this.statsCalls.length : 1);
   }
 
   async listSessions(): Promise<SessionPage> {
@@ -135,6 +142,22 @@ class ScopedBreakdownTransport extends HybridFixtureTransport {
   }
 }
 
+class BoundedStatsTransport extends HybridFixtureTransport {
+  active = 0;
+  maxActive = 0;
+
+  async getSessionStats(window: UsageWindow): Promise<OpenCodeSessionStats> {
+    this.active += 1;
+    this.maxActive = Math.max(this.maxActive, this.active);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return await super.getSessionStats(window);
+    } finally {
+      this.active -= 1;
+    }
+  }
+}
+
 function adapterFor(transport: OpenCodeTransport): OpenCode2AdapterType {
   const stats = new OpenCodeStatsSource(transport);
   const adapter = {
@@ -157,6 +180,14 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
   assert.equal(result.source, "stats");
   assert.equal(result.records.length, 0);
   assert.deepEqual(transport.statsCalls, ["hour", "day", "week"]);
+  assert.deepEqual(transport.trendCalls, [
+    ...Array.from({ length: 12 }, () => "hour" as const),
+    ...Array.from({ length: 24 }, () => "day" as const),
+    ...Array.from({ length: 7 }, () => "week" as const),
+  ]);
+  assert.equal(result.trendsByWindow?.hour?.length, 12);
+  assert.equal(result.trendsByWindow?.day?.length, 24);
+  assert.equal(result.trendsByWindow?.week?.length, 7);
   assert.equal(transport.sessionCalls.length, 0);
   assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);
@@ -173,6 +204,14 @@ test("OpenCodeStatsSource retains model/provider breakdowns for each window", as
   assert.equal(result.providersByWindow?.hour?.[0]?.totals.recorded_total, 21);
   assert.equal(result.providersByWindow?.day?.[0]?.totals.recorded_total, 32);
   assert.equal(result.providersByWindow?.week?.[0]?.totals.recorded_total, 43);
+});
+
+test("OpenCodeStatsSource bounds concurrent trend requests", async () => {
+  const transport = new BoundedStatsTransport();
+  const result = await new OpenCodeStatsSource(transport).collect(request());
+
+  assert.equal(result.trendsByWindow?.day?.length, 24);
+  assert.ok(transport.maxActive <= 4);
 });
 
 test("HybridUsageSource falls back for the whole refresh when stats ignores one range", async () => {
@@ -235,12 +274,16 @@ function partialResult(): CollectionResult {
     completeness: "final",
   });
   const totals = toUsageTotals({ input: 7, output: 3, reasoning: 1, cacheRead: 2, cacheWrite: 4 });
+  const dayBucket = createUsageTrendBuckets(windows[1]!)[0]!;
   return {
     capturedAt: NOW,
     windows,
     source: "message-scan",
     records: [record],
     totalsByWindow: { hour: totals, day: totals, week: totals },
+    trendsByWindow: {
+      day: [{ ...dayBucket, totals }],
+    },
     coverage: {
       complete: false,
       sessionsDiscovered: 2,
@@ -269,6 +312,42 @@ function sourceReturning(result: CollectionResult): UsageSource {
   return { collect: async () => result };
 }
 
+function emptyProviderResult(source: "codex" | "antigravity"): CollectionResult {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const zero = toUsageTotals({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+  return {
+    capturedAt: NOW,
+    windows,
+    source,
+    records: [],
+    totalsByWindow: { hour: zero, day: zero, week: zero },
+    coverage: {
+      complete: true,
+      sessionsDiscovered: 0,
+      sessionsScanned: 0,
+      sessionsSkipped: 0,
+      pagesRead: 0,
+      jobsRetried: 0,
+      provisionalMessages: 0,
+      errors: [],
+    },
+  };
+}
+
+test("UnifiedUsageSource retains OpenCode stats totals and trends", async () => {
+  const result = await new UnifiedUsageSource(
+    new OpenCodeStatsSource(new HybridFixtureTransport()),
+    sourceReturning(emptyProviderResult("codex")),
+    sourceReturning(emptyProviderResult("antigravity")),
+  ).collect(request());
+
+  assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
+  assert.equal(result.totalsByWindow.day?.recorded_total, 102);
+  assert.equal(result.trendsByWindow?.hour?.length, 12);
+  assert.equal(result.trendsByWindow?.day?.length, 24);
+  assert.equal(result.trendsByWindow?.week?.length, 7);
+});
+
 test("CachedUsageSource persists a partial result without presenting it as complete", async () => {
   await withDirectory(async (directory) => {
     const store = new NormalizedCacheStore(directory);
@@ -283,6 +362,8 @@ test("CachedUsageSource persists a partial result without presenting it as compl
     assert.equal(loaded.snapshot.coverage.complete, false);
     assert.equal(loaded.snapshot.coverage.errors[0]?.code, "transport");
     assert.equal(loaded.snapshot.records[0]?.recorded_total, 17);
+    assert.equal(loaded.snapshot.trendsByWindow?.day?.length, 1);
+    assert.equal(loaded.snapshot.trendsByWindow?.day?.[0]?.totals.recorded_total, 17);
   });
 });
 
@@ -373,7 +454,7 @@ test("explicit JSON output serializes an injected collection without network acc
     totals: Record<string, { recorded_total: number }>;
   };
 
-  assert.equal(payload.schemaVersion, 1);
+  assert.equal(payload.schemaVersion, 3);
   assert.equal(payload.source, "stats");
   assert.equal(payload.windows.day.timezone, "UTC");
   assert.equal(payload.windows.hour.from, "2026-09-02T09:00:00.000Z");

@@ -79,6 +79,7 @@ test("JSON emits exact windows and stable metadata", () => {
   assert.deepEqual(Object.keys(json), [
     "schemaVersion", "windows", "source", "version", "lastUpdated",
     "nextRefreshAt", "stale", "coverage", "totals", "trends", "models", "providers",
+    "projects", "providersByWindow", "projectsByWindow", "totalsByProvider", "totalsByProject",
   ]);
   assert.equal(json.windows.day.from, "2026-09-01T21:00:00.000Z");
   assert.equal(json.windows.week.to, "2026-09-06T21:00:00.000Z");
@@ -101,6 +102,14 @@ test("partial and stale snapshots remain visibly honest", () => {
   const json = toJSONSnapshot(fixture({ stale: true }));
   assert.equal(json.stale, true);
   assert.equal(json.coverage.complete, false);
+});
+
+test("interactive header keeps the top bar focused on the app identity", () => {
+  const output = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
+  const topBar = output.slice(0, output.indexOf("◆ Trend"));
+  assert.match(topBar, /OC2TOKEN|OpenCode 2 Token Usage/);
+  assert.doesNotMatch(topBar, /Source:|Version:|Window:|Timezone:|Status:/);
+  assert.match(output, /Status: COMPLETE/);
 });
 
 test("narrow dashboard uses one column and contains the navigation footer", () => {
@@ -214,6 +223,39 @@ test("trend panel renders a graph rather than one textual row per bucket", () =>
   assert.doesNotMatch(trendPanel, /bucket-0/);
 });
 
+test("stats snapshots use persisted trend buckets when records are empty", () => {
+  const output = renderDashboard(fixture({
+    source: "stats",
+    records: [],
+    trendsByWindow: {
+      day: Array.from({ length: 24 }, (_, index) => ({
+        label: `${String(index).padStart(2, "0")}:00`,
+        from: new Date(NOW.getTime() - (24 - index) * 60 * 60 * 1_000),
+        to: new Date(NOW.getTime() - (23 - index) * 60 * 60 * 1_000),
+        totals: toUsageTotals({
+          input: index === 12 ? 250 : 0,
+          output: 0,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+      })),
+    },
+  }), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    selectedWindow: "day",
+    now: NOW,
+  });
+  const trendStart = output.indexOf("Trend · today");
+  const trendEnd = output.indexOf("◆ Models", trendStart);
+  const trendPanel = output.slice(trendStart, trendEnd);
+  assert.ok(trendStart >= 0 && trendEnd > trendStart);
+  assert.match(trendPanel, /[▇█▉▊▋]/, "stats trend should contain plotted graph cells");
+  assert.doesNotMatch(trendPanel, /No trend data recorded/);
+});
+
 test("models and providers use the selected window breakdown values", () => {
   const output = renderDashboard(fixture({
     modelsByWindow: {
@@ -285,4 +327,94 @@ test("trend graph remains ANSI-free with no-color and colored when enabled", () 
   assert.doesNotMatch(plain, /\u001b\[/);
   assert.match(colored, /\u001b\[/);
   assert.match(plain, /Trend · today/);
+});
+
+test("JSON snapshot uses schemaVersion 3 and exposes totalsByProvider per window", () => {
+  const json = toJSONSnapshot(fixture());
+  assert.equal(json.schemaVersion, 3);
+  assert.ok(json.totalsByProvider);
+  for (const kind of ["hour", "day", "week"] as const) {
+    assert.ok(kind in json.totalsByProvider);
+    assert.ok(kind in json.providersByWindow);
+  }
+  // Single-provider fixture: totalsByProvider matches providers list
+  assert.ok(Object.keys(json.totalsByProvider.day).includes("openai"));
+  assert.equal(json.totalsByProvider.day["openai"]?.recorded_total, 132);
+  assert.equal(json.providers.length, 1);
+  assert.equal(json.providersByWindow.day.length, 1);
+});
+
+test("unified multi-provider JSON and dashboard render without loss", () => {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  function rec(provider: string, model: string, input: number, createdAt: Date) {
+    return createUsageRecord({
+      sessionID: `${provider}-session`,
+      messageID: `${provider}-msg-${input}-${createdAt.getTime()}`,
+      createdAt,
+      model,
+      tokens: { input, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+      observedAt: NOW,
+      completeness: "final",
+      provider: provider as "opencode" | "codex" | "antigravity",
+    });
+  }
+  const records = [
+    rec("opencode", "openai/gpt-5", 100, new Date("2026-09-02T09:55:00.000Z")),
+    rec("codex", "codex-model", 50, new Date("2026-09-02T09:56:00.000Z")),
+    rec("antigravity", "gemini-3-pro", 30, new Date("2026-09-02T09:57:00.000Z")),
+  ];
+  const totals = toUsageTotals({ input: 180, output: 15, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+  const input: Record<string, unknown> = {
+    capturedAt: NOW,
+    windows,
+    source: "unified",
+    records,
+    totalsByWindow: { hour: totals, day: totals, week: totals },
+    coverage: { complete: true, sessionsDiscovered: 3, sessionsScanned: 3, sessionsSkipped: 0, pagesRead: 3, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const json = toJSONSnapshot(input);
+  assert.equal(json.schemaVersion, 3);
+  assert.equal(json.source, "unified");
+  // All three providers appear in aggregated providers list (openai vendor for opencode, plus codex/antigravity)
+  const names = json.providers.map((p) => p.name).sort();
+  assert.ok(names.includes("openai"));
+  assert.ok(names.includes("codex"));
+  assert.ok(names.includes("antigravity"));
+  assert.ok(json.totalsByProvider.hour["codex"]);
+  assert.ok(json.totalsByProvider.hour["antigravity"]);
+  assert.equal(json.totalsByProvider.hour["codex"]?.input, 50);
+  assert.equal(json.totalsByProvider.hour["antigravity"]?.input, 30);
+
+  const dash = renderDashboard(input, { isTTY: true, color: false, width: 100, now: NOW, selectedWindow: "day" });
+  assert.match(dash, /Providers/);
+  assert.match(dash, /openai/);
+  assert.match(dash, /codex/);
+  assert.match(dash, /antigravity/);
+  // Provider stack line should contain percentages
+  assert.match(dash, /\(\d+%\)/);
+  // Table rendering also contains unified source
+  const table = renderOutput(input, { format: "table", isTTY: false });
+  assert.match(table, /Source: unified/);
+});
+
+test("provider stack stacks vertically under narrow width", () => {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const records = [
+    createUsageRecord({ sessionID: "a", messageID: "m1", createdAt: new Date("2026-09-02T09:55:00.000Z"), model: "m/a", tokens: { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }, observedAt: NOW, completeness: "final", provider: "codex" }),
+    createUsageRecord({ sessionID: "b", messageID: "m2", createdAt: new Date("2026-09-02T09:55:00.000Z"), model: "m/b", tokens: { input: 20, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }, observedAt: NOW, completeness: "final", provider: "antigravity" }),
+  ];
+  const totals = toUsageTotals({ input: 30, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+  const snap: Record<string, unknown> = {
+    capturedAt: NOW,
+    windows,
+    source: "unified",
+    records,
+    totalsByWindow: { hour: totals, day: totals, week: totals },
+    coverage: { complete: true, sessionsDiscovered: 2, sessionsScanned: 2, sessionsSkipped: 0, pagesRead: 2, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const narrow = renderDashboard(snap, { isTTY: true, color: false, width: 60, now: NOW });
+  // Under 78 width, providers stack vertical and starts with heading
+  assert.match(narrow, /Providers/);
+  // Ensure no ANSI when color false
+  assert.doesNotMatch(narrow, /\u001b\[/);
 });

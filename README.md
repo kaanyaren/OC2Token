@@ -24,7 +24,7 @@ oc2token --refresh 0     # manual-only dashboard
 oc2token doctor          # diagnose the local OpenCode 2 service
 ```
 
-Press `r` to refresh, `1`/`2`/`3` to select hour/day/week, `?` for help, and
+Press `r` to refresh, `1`/`2`/`3` to select hour/day/week, `s` for settings, `?` for help, and
 `q` to quit. Use `--timezone Europe/Istanbul` to override the local timezone.
 The interactive dashboard uses a purple/orange CodeBurn-inspired palette;
 pass `--no-color` (or set `NO_COLOR`) for a plain terminal-safe view.

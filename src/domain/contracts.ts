@@ -1,9 +1,11 @@
 import type { CollectionError } from "./errors.js";
 import type { TokenComponentsInput, UsageTotals } from "./tokens.js";
 import type { UsageRecord, UsageRecordCompleteness } from "./records.js";
-import type { UsageWindow, UsageWindowKind } from "./windows.js";
+import type { UsageBucket, UsageWindow, UsageWindowKind } from "./windows.js";
 
-export type CollectionSource = "stats" | "message-scan";
+export type CollectionSource = "stats" | "message-scan" | "codex" | "antigravity" | "unified";
+
+export type ProviderKind = "opencode" | "codex" | "antigravity";
 
 /**
  * Coverage describes what a collection actually observed. `complete` means
@@ -34,6 +36,21 @@ export interface UsageBreakdown {
 
 export type UsageBreakdownsByWindow = Readonly<
   Partial<Record<UsageWindowKind, ReadonlyArray<UsageBreakdown>>>
+>;
+
+/** Range accepted by the OpenCode stats endpoint. */
+export interface UsageStatsRange {
+  readonly from: Date;
+  readonly to: Date;
+  readonly timezone: string;
+}
+
+export interface UsageTrendBucket extends UsageBucket {
+  readonly totals: UsageTotals;
+}
+
+export type UsageTrendsByWindow = Readonly<
+  Partial<Record<UsageWindowKind, ReadonlyArray<UsageTrendBucket>>>
 >;
 
 /**
@@ -72,8 +89,11 @@ export interface CollectionResult {
   readonly totalsByWindow: UsageTotalsByWindow;
   readonly models?: ReadonlyArray<UsageBreakdown>;
   readonly providers?: ReadonlyArray<UsageBreakdown>;
+  readonly projects?: ReadonlyArray<UsageBreakdown>;
   readonly modelsByWindow?: UsageBreakdownsByWindow;
   readonly providersByWindow?: UsageBreakdownsByWindow;
+  readonly projectsByWindow?: UsageBreakdownsByWindow;
+  readonly trendsByWindow?: UsageTrendsByWindow;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;
@@ -97,8 +117,11 @@ export interface StoredSnapshot {
   readonly totalsByWindow: UsageTotalsByWindow;
   readonly models?: ReadonlyArray<UsageBreakdown>;
   readonly providers?: ReadonlyArray<UsageBreakdown>;
+  readonly projects?: ReadonlyArray<UsageBreakdown>;
   readonly modelsByWindow?: UsageBreakdownsByWindow;
   readonly providersByWindow?: UsageBreakdownsByWindow;
+  readonly projectsByWindow?: UsageBreakdownsByWindow;
+  readonly trendsByWindow?: UsageTrendsByWindow;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;
@@ -123,6 +146,9 @@ export interface MessageListRequest extends TransportRequestOptions {
 export interface OpenCodeSession {
   readonly sessionID: string;
   readonly parentSessionID?: string;
+  readonly projectID?: string;
+  readonly directory?: string;
+  readonly workspaceID?: string;
 }
 
 export interface OpenCodeAssistantMessage {
@@ -158,8 +184,14 @@ export interface OpenCodeRange {
   readonly timezone: string;
 }
 
+export interface OpenCodeProject {
+  readonly id: string;
+  readonly canonical: string;
+  readonly name?: string;
+}
+
 export interface OpenCodeSessionStats {
-  readonly requestedWindow: UsageWindow;
+  readonly requestedWindow: UsageStatsRange;
   /** The server-reported range must be compared with requestedWindow by the collector. */
   readonly reportedRange: OpenCodeRange;
   readonly totals: UsageTotals;
@@ -180,11 +212,12 @@ export interface OpenCodeSessionStats {
 export interface OpenCodeTransport {
   getHealth(options?: TransportRequestOptions): Promise<OpenCodeHealth>;
   getSessionStats(
-    window: UsageWindow,
-    options?: TransportRequestOptions,
+    window: UsageStatsRange,
+    options?: TransportRequestOptions & { readonly project?: string },
   ): Promise<OpenCodeSessionStats>;
   listSessions(request?: SessionListRequest): Promise<SessionPage>;
   listMessages(request: MessageListRequest): Promise<MessagePage>;
+  listProjects?(options?: TransportRequestOptions): Promise<ReadonlyArray<OpenCodeProject>>;
 }
 
 /** A source such as stats or a paginated message collector. */

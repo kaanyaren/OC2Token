@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 
 import { DomainError } from "../domain/errors.js";
-import { parseTokenComponents, recorded_total, type TokenComponents } from "../domain/index.js";
+import {
+  parseTokenComponents,
+  recorded_total,
+  type ProviderKind,
+  type TokenComponents,
+} from "../domain/index.js";
 import {
   CACHE_FORMAT,
   CURRENT_CACHE_SCHEMA_VERSION,
@@ -25,6 +30,8 @@ export interface PersistedRecord {
   readonly tokenRevision: string;
   readonly observedAt: string;
   readonly completeness: "final" | "provisional";
+  readonly provider: ProviderKind;
+  readonly project?: string;
 }
 
 export interface RecordsDocument {
@@ -90,6 +97,28 @@ function recordFromUnknown(value: unknown, index: number): PersistedRecord {
   if (completeness !== "final" && completeness !== "provisional") {
     fail(`records[${index}].completeness must be final or provisional`);
   }
+  const rawProvider = value.provider ?? "opencode";
+  if (rawProvider !== "opencode" && rawProvider !== "codex" && rawProvider !== "antigravity") {
+    fail(`records[${index}].provider must be one of opencode, codex, antigravity`);
+  }
+  const provider = rawProvider as ProviderKind;
+
+  // Project field: optional, may contain slashes (paths). Validate length and control chars separately.
+  let project: string | undefined;
+  if (value.project !== undefined && value.project !== null) {
+    if (typeof value.project !== "string") {
+      fail(`records[${index}].project must be a string when present`);
+    }
+    const trimmed = value.project.trim();
+    if (trimmed.length === 0) {
+      project = undefined;
+    } else {
+      if (trimmed.length > 1024 || /[\u0000-\u001f]/.test(trimmed)) {
+        fail(`records[${index}].project must be 1..1024 chars without control characters`);
+      }
+      project = trimmed;
+    }
+  }
 
   const normalized = {
     key,
@@ -102,6 +131,8 @@ function recordFromUnknown(value: unknown, index: number): PersistedRecord {
     tokenRevision,
     observedAt: dateField(value.observedAt ?? new Date(), `records[${index}].observedAt`),
     completeness,
+    provider,
+    ...(project === undefined ? {} : { project }),
   } satisfies PersistedRecord;
 
   // A caller-provided total is metadata only. It is never trusted or written;
@@ -293,6 +324,25 @@ export function migrateManifestDocument(value: unknown): MigratedDocument<Manife
     fail("manifest is incomplete");
   }
 
+  let providerFingerprints: Record<ProviderKind, string> | undefined;
+  if (isRecord(value.providerFingerprints)) {
+    const fingerprints: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(value.providerFingerprints)) {
+      if (
+        (key === "opencode" || key === "codex" || key === "antigravity") &&
+        typeof entry === "string" &&
+        entry.length > 0 &&
+        entry.length <= 512 &&
+        /^[a-zA-Z0-9._:-]{1,256}$/.test(entry)
+      ) {
+        fingerprints[key] = entry;
+      }
+    }
+    if (Object.keys(fingerprints).length > 0) {
+      providerFingerprints = fingerprints as Record<ProviderKind, string>;
+    }
+  }
+
   const manifest: ManifestDocument = {
     format: CACHE_FORMAT,
     schemaVersion: CURRENT_CACHE_SCHEMA_VERSION,
@@ -304,10 +354,14 @@ export function migrateManifestDocument(value: unknown): MigratedDocument<Manife
     recordBytes: recordBytes as number,
     recordSha256,
     snapshot: sanitizeSnapshot(source),
+    ...(providerFingerprints ? { providerFingerprints } : {}),
   };
   return {
     value: manifest,
-    migrated: version !== CURRENT_CACHE_SCHEMA_VERSION || value.format !== CACHE_FORMAT,
+    migrated:
+      version !== CURRENT_CACHE_SCHEMA_VERSION ||
+      value.format !== CACHE_FORMAT ||
+      (value.providerFingerprints !== undefined && providerFingerprints === undefined),
   };
 }
 

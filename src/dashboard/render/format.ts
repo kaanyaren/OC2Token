@@ -135,12 +135,12 @@ export function formatTokenBreakdown(totals: {
   readonly cacheRead: number;
   readonly cacheWrite: number;
 }): string {
+  const cache = totals.cacheRead + totals.cacheWrite;
+  const out = totals.output + totals.reasoning;
   return [
-    `In ${formatTokenCount(totals.input)}`,
-    `Out ${formatTokenCount(totals.output)}`,
-    `Reason ${formatTokenCount(totals.reasoning)}`,
-    `Cache R ${formatTokenCount(totals.cacheRead)}`,
-    `W ${formatTokenCount(totals.cacheWrite)}`,
+    `I ${formatTokenCount(totals.input)}`,
+    `O ${formatTokenCount(out)}`,
+    `C ${formatTokenCount(cache)}`,
   ].join("  ");
 }
 

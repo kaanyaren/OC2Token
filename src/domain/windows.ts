@@ -48,6 +48,13 @@ export interface UsageWindowSet {
   readonly week: ISOWeekWindow;
 }
 
+/** One half-open, timezone-aware interval used to plot a usage trend. */
+export interface UsageBucket {
+  readonly label: string;
+  readonly from: Date;
+  readonly to: Date;
+}
+
 type CivilDate = Readonly<{ year: number; month: number; day: number }>;
 type CivilDateTime = Readonly<CivilDate & { hour: number; minute: number; second: number }>;
 
@@ -317,6 +324,71 @@ export function createUsageWindows(
     day: createUsageWindow("day", now, timezone),
     week: createUsageWindow("week", now, timezone),
   };
+}
+
+function trendBucketLabel(instant: Date, timezone: string, kind: UsageWindowKind): string {
+  try {
+    return new Intl.DateTimeFormat(
+      "en-CA",
+      kind === "week"
+        ? { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }
+        : { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
+    ).format(instant);
+  } catch {
+    return instant.toISOString();
+  }
+}
+
+/**
+ * Build the stable trend intervals for a requested window. Calendar-day
+ * buckets advance in elapsed time from the local-day bounds, which preserves
+ * both missing and repeated hours on DST transition days. Week buckets use
+ * local midnights, so a DST day changes the bucket duration without changing
+ * the seven-day shape of the ISO week.
+ */
+export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBucket[] {
+  assertTimeZone(window.timezone);
+  assertWindowRange(window.from, window.to, window.kind);
+
+  const buckets: UsageBucket[] = [];
+  const append = (from: Date, to: Date): void => {
+    const clippedFrom = Math.max(window.from.getTime(), from.getTime());
+    const clippedTo = Math.min(window.to.getTime(), to.getTime());
+    if (clippedFrom >= clippedTo) return;
+    const bucketFrom = new Date(clippedFrom);
+    buckets.push({
+      label: trendBucketLabel(bucketFrom, window.timezone, window.kind),
+      from: bucketFrom,
+      to: new Date(clippedTo),
+    });
+  };
+
+  if (window.kind === "hour") {
+    const bucketDuration = 5 * 60 * 1_000;
+    for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
+      append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
+    }
+    return buckets;
+  }
+
+  if (window.kind === "day") {
+    const bucketDuration = HOUR_MS;
+    for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
+      append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
+    }
+    return buckets;
+  }
+
+  const localStart = localDateAt(window.from, window.timezone);
+  for (let day = 0; day < ISO_WEEK_DAYS; day += 1) {
+    const fromLocal = addCivilDays(localStart, day);
+    const toLocal = addCivilDays(localStart, day + 1);
+    append(
+      instantAtLocal({ ...fromLocal, hour: 0, minute: 0, second: 0 }, window.timezone),
+      instantAtLocal({ ...toLocal, hour: 0, minute: 0, second: 0 }, window.timezone),
+    );
+  }
+  return buckets;
 }
 
 export function containsInstant(window: UsageWindow, instant: Date): boolean {
