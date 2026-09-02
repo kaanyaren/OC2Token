@@ -218,6 +218,43 @@ function composeCards(cards: string[][], gap = 2): string[] {
   );
 }
 
+const HEADER_LINES = 4;
+const CARD_LINES = 7;
+const CARD_GAP = 2;
+
+export interface CardHitRegion {
+  readonly kind: UsageWindowKind;
+  readonly x1: number;
+  readonly y1: number;
+  readonly x2: number;
+  readonly y2: number;
+}
+
+export function getCardHitRegions(width: number): ReadonlyArray<CardHitRegion> {
+  const clamped = Math.max(20, width);
+  const headerHeight = HEADER_LINES;
+  const isWide = clamped >= WIDE_LAYOUT_MIN_WIDTH;
+  if (isWide) {
+    const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((clamped - 4) / 3));
+    const y1 = headerHeight + 1;
+    const y2 = y1 + CARD_LINES - 1;
+    return allWindowKinds().map((kind, idx) => {
+      const x1 = idx * (cardWidth + CARD_GAP) + 1;
+      const x2 = x1 + cardWidth - 1;
+      return { kind, x1, y1, x2, y2 };
+    });
+  }
+  const cardWidth = Math.max(12, Math.min(CARD_MIN_WIDTH, clamped - 2));
+  const yGap = 1;
+  return allWindowKinds().map((kind, idx) => {
+    const y1 = headerHeight + 1 + idx * (CARD_LINES + yGap);
+    const y2 = y1 + CARD_LINES - 1;
+    const x1 = 1;
+    const x2 = x1 + cardWidth - 1;
+    return { kind, x1, y1, x2, y2 };
+  });
+}
+
 function renderHeader(color: boolean, width: number): string[] {
   const compact = width < 70;
   const identity = width < 28

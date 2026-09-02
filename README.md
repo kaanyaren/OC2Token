@@ -153,10 +153,10 @@ oc2token --no-color     # or NO_COLOR=1 for plain output
 
 ## 🎮 Interactive dashboard
 
-| Key | Action |
-|-----|--------|
+| Key / Click | Action |
+|-------------|--------|
 | `r` / `R` | Refresh now |
-| `1` / `2` / `3` | Select **hour · day · week** |
+| `1` / `2` / `3` · **click top card** | Select **hour · day · week** |
 | `Tab` / `←` `→` / `↑` `↓` | Cycle windows |
 | `p` | Projects panel |
 | `s` | Settings — toggle providers, adjust refresh |

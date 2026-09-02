@@ -4,6 +4,8 @@ export const ANSI = Object.freeze({
   dim: "\u001b[2m",
   underline: "\u001b[4m",
   underlineOff: "\u001b[24m",
+  mouseEnable: "\u001b[?1000h\u001b[?1006h",
+  mouseDisable: "\u001b[?1006l\u001b[?1000l",
   // CodeBurn-inspired terminal palette: violet carries structure, orange
   // carries focus and activity. 256-color escapes work in Terminal.app,
   // iTerm2, and modern CI TTYs without requiring a background color.

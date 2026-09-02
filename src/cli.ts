@@ -6,6 +6,7 @@ import { basename } from "node:path";
 import {
   ANSI,
   createStableRedraw,
+  getCardHitRegions,
   renderDashboard,
   renderJSON,
   renderTable,
@@ -83,7 +84,7 @@ Options:
   -h, --help             Show this help
   -v, --version          Show the version
 
-Dashboard keys: r refresh, 1/2/3 select period, p projects, s settings, ? help, q quit.
+Dashboard keys: r refresh, 1/2/3 / click top card to select period, p projects, s settings, ? help, q quit.
 `;
 }
 
@@ -479,6 +480,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     await coordinator.quit();
     if (io.stdin.isTTY) io.stdin.setRawMode?.(false);
     io.stdin.pause();
+    // Disable mouse tracking before restoring cursor
+    if (io.stdout.isTTY) io.stdout.write(ANSI.mouseDisable);
     io.stdout.write(`\n${redraw.cleanup({ isTTY: true, ansi: true })}\n`);
   };
 
@@ -490,11 +493,15 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   io.stdin.setRawMode?.(true);
   io.stdin.resume();
   io.stdout.write(ANSI.cursorHide);
+  if (io.stdout.isTTY) io.stdout.write(ANSI.mouseEnable);
   draw();
   void coordinator.start().catch(() => undefined);
 
+  let inputBuffer = "";
   const onInput = (chunk: Buffer | string) => {
-    const value = chunk.toString();
+    inputBuffer += chunk.toString();
+    const value = inputBuffer;
+    inputBuffer = "";
     const periods: UsageWindowKind[] = ["hour", "day", "week"];
     const nextPeriod = (): UsageWindowKind => {
       const current = coordinator.getState().period;
@@ -508,6 +515,46 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     };
     let i = 0;
     while (i < value.length) {
+      // SGR mouse click: \x1b[<Cb;Cx;CyM (press) / m (release)
+      if (value.startsWith("\u001b[<", i)) {
+        const termM = value.indexOf("M", i + 3);
+        const termLower = value.indexOf("m", i + 3);
+        let end = -1;
+        let isPress = true;
+        if (termM !== -1 && (termLower === -1 || termM < termLower)) {
+          end = termM;
+          isPress = true;
+        } else if (termLower !== -1) {
+          end = termLower;
+          isPress = false;
+        } else {
+          // Incomplete SGR sequence — wait for next chunk
+          inputBuffer = value.slice(i);
+          break;
+        }
+        const body = value.slice(i + 3, end);
+        const parts = body.split(";");
+        if (parts.length === 3 && isPress) {
+          const cb = Number(parts[0]);
+          const cx = Number(parts[1]);
+          const cy = Number(parts[2]);
+          if (Number.isFinite(cb) && Number.isFinite(cx) && Number.isFinite(cy) && cb === 0) {
+            if (!settingsState.visible && !projectsVisible) {
+              const w = Math.max(20, io.stdout.columns || 100);
+              const regions = getCardHitRegions(w);
+              for (const r of regions) {
+                if (cx >= r.x1 && cx <= r.x2 && cy >= r.y1 && cy <= r.y2) {
+                  coordinator.setPeriod(r.kind);
+                  draw();
+                  break;
+                }
+              }
+            }
+          }
+        }
+        i = end + 1;
+        continue;
+      }
       if (value.startsWith("\u001b[", i)) {
         if (value.startsWith("\u001b[Z", i)) {
           if (settingsState.visible) {
