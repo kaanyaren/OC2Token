@@ -22,6 +22,7 @@ import {
   type UsageWindow,
 } from "../domain/index.js";
 import type { OpenCodeClientLike } from "./client.js";
+import { fingerprintForHealth } from "./client.js";
 
 export interface RetryPolicy {
   /** Maximum number of attempts, including the first request. */
@@ -43,6 +44,13 @@ export interface StatsRequestOptions extends TransportRequestOptions {
 export interface OpenCodeTransportOptions extends RetryPolicy {
   readonly client: OpenCodeClientLike;
   readonly pageSize?: number;
+  /**
+   * Advertised service URL used for the health fingerprint. When set (the
+   * adapter passes the connected endpoint URL), getHealth returns the same
+   * fingerprint as connectOpenCode. When unset, an empty URL is hashed, so
+   * the format stays unified (24 hex chars) but the value differs.
+   */
+  readonly endpointUrl?: string;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -156,8 +164,10 @@ function adapterError(error: unknown): DomainError {
     });
   }
   if (error instanceof Error && error.name === "AbortError") {
-    return new DomainError("transport", "OpenCode request was aborted by its deadline", {
-      retryable: true,
+    // An abort is caller cancellation, never a retryable transport outage.
+    // Deadline expiry is already converted to a retryable timeout error before
+    // this mapping, so any AbortError reaching here means cancelled.
+    return new DomainError("cancelled", "OpenCode request was cancelled", {
       cause: error,
     });
   }
@@ -223,11 +233,17 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 async function defaultSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
   if (milliseconds <= 0) return;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds);
+    let onAbort: (() => void) | undefined;
+    const timer = setTimeout(() => {
+      if (onAbort !== undefined && signal !== undefined) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, milliseconds);
     if (signal === undefined) return;
-    const onAbort = () => {
+    onAbort = () => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
+      signal.removeEventListener("abort", onAbort!);
       reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
     };
     if (signal.aborted) onAbort();
@@ -569,17 +585,21 @@ export class OpenCode2Transport implements OpenCodeTransport {
   readonly client: OpenCodeClientLike;
   readonly pageSize: number;
   readonly retryPolicy: RetryPolicy;
+  readonly endpointUrl: string | undefined;
 
   constructor(options: OpenCodeTransportOptions) {
     this.client = options.client;
     this.pageSize = Math.max(1, Math.min(1_000, Math.floor(options.pageSize ?? DEFAULT_PAGE_SIZE)));
     this.retryPolicy = { ...options };
+    this.endpointUrl = options.endpointUrl;
+  }
+
+  /** Update the endpoint URL used for fingerprinting after a (re)connect. */
+  setEndpointUrl(url: string | undefined): void {
+    (this as { endpointUrl: string | undefined }).endpointUrl = url;
   }
 
   async getHealth(options: TransportRequestOptions = {}): Promise<OpenCodeHealth> {
-    // The transport cannot derive a safe fingerprint without the endpoint.
-    // Callers that need the service fingerprint should use connectOpenCode;
-    // this method still returns the stable API health metadata.
     const raw = await retryingRead(
       (signal) => this.client.health.get({ signal }),
       { ...this.retryPolicy, signal: options.signal },
@@ -587,8 +607,10 @@ export class OpenCode2Transport implements OpenCodeTransport {
     if (!isRecord(raw) || raw.healthy !== true || typeof raw.version !== "string") {
       throw new DomainError("invalid-data", "OpenCode health response is malformed");
     }
-    const pid = raw.pid;
-    const fingerprint = `${raw.version}:${typeof pid === "number" ? pid : "unknown"}`;
+    // Unified fingerprint format with connectOpenCode (see fingerprintForHealth):
+    // sha256(url + NUL + version + NUL + pid), 24 hex chars. The transport has
+    // no endpoint until the adapter sets one, so an empty URL is hashed then.
+    const fingerprint = fingerprintForHealth(this.endpointUrl, raw.version, raw.pid);
     return { version: raw.version, fingerprint };
   }
 

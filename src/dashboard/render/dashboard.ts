@@ -10,6 +10,7 @@ import {
   type AnsiOptions,
   themeCache,
   themeCacheUnderline,
+  themeCost,
   themeCyan,
   themeIn,
   themeInUnderline,
@@ -20,7 +21,10 @@ import {
 } from "./ansi.js";
 import {
   coverageState,
+  DASHBOARD_ROW_CAP,
   formatCoverage,
+  formatCost,
+  formatStatusFooter,
   formatTokenBreakdown,
   formatTokenCount,
   safeIdentifier,
@@ -35,6 +39,7 @@ import {
   type DashboardSnapshotInput,
   type DashboardWindow,
 } from "./types.js";
+import { ALL_PROVIDER_KINDS } from "../settings/index.js";
 
 const CARD_MIN_WIDTH = 27;
 const WIDE_LAYOUT_MIN_WIDTH = 90;
@@ -197,6 +202,9 @@ function cardLines(
   }
   const title = `${selected ? "▶" : "·"} ${cardTitle(kind)}`;
   const frame = (value: string): string => `│${pad(value, inner)}│`;
+  const costLabel = inner < 15 ? "Cost" : "Est. cost";
+  const costValue = formatCost(window.cost);
+  const costLine = `${themePurple(costLabel, color, true)}  ${themeCost(costValue, color)}`;
   const lines = [
     paint(border(width, "╭", "─", "╮"), borderColor, color),
     frame(selected
@@ -204,6 +212,7 @@ function cardLines(
       : themePurple(truncate(title, inner), color, true)),
     frame(first),
     frame(colorizeBreakdown(truncateExact(displayComponents, inner), color, true)),
+    frame(pad(costLine, inner)),
     frame(themeOrange(truncate(`Range ${safeLabel(window.window.label)}`, inner), color)),
     paint(border(width, "╰", "─", "╯"), borderColor, color),
   ];
@@ -269,14 +278,19 @@ function renderHeader(color: boolean, width: number): string[] {
   ];
 }
 
+/**
+ * Single canonical TTY status footer. Uses the shared formatStatusFooter
+ * helper (`Status: <STATE · sessions…>` once) — do not duplicate the coverage
+ * string as `Status: X · Coverage: X`. Colored by coverageState; truncated to
+ * width to preserve redraw geometry.
+ */
 function renderStatusFooter(
   snapshot: ReturnType<typeof normalizeDashboardSnapshot>,
   color: boolean,
   width: number,
 ): string {
   const state = coverageState(snapshot.coverage, snapshot.stale);
-  const coverage = formatCoverage(snapshot.coverage, snapshot.stale);
-  return statusColor(truncate(`Status: ${coverage} · Coverage: ${coverage}`, width), state, color);
+  return statusColor(truncate(formatStatusFooter(snapshot.coverage, snapshot.stale), width), state, color);
 }
 
 function renderTrend(
@@ -292,8 +306,7 @@ function renderTrend(
   const max = Math.max(...trend.map((bucket) => bucket.totals.recorded_total), 0);
   if (max === 0) return [panelHeading(title, width, color), "  No trend data recorded."];
 
-  const axisWidth = Math.max(4, formatTokenCount(max).length);
-  const graphWidth = Math.max(8, width - axisWidth - 3);
+  const graphWidth = Math.max(8, width - 4);
   const points =
     trend.length <= graphWidth
       ? Array.from({ length: graphWidth }, (_, index) => {
@@ -318,13 +331,10 @@ function renderTrend(
         const filled = point.totals.recorded_total > 0 && point.totals.recorded_total / max >= level / levels;
         return filled ? themeOrange("█", color, true) : themePurple("·", color);
       }).join("");
-      const label = level === levels || level === 1
-        ? formatTokenCount(Math.round(max * level / levels)).padStart(axisWidth)
-        : " ".repeat(axisWidth);
-      return `${label} ${themePurple("│", color)} ${cells}`;
+      return `  ${cells}`;
     }),
-    `${" ".repeat(axisWidth)} ${themePurple(`└${"─".repeat(graphWidth)}`, color)}`,
-    `${" ".repeat(axisWidth + 2)}${themePurple(graphLabels(points, graphWidth), color)}`,
+    `  ${themePurple("─".repeat(graphWidth), color)}`,
+    `  ${themePurple(graphLabels(points, graphWidth), color)}`,
   ];
 }
 
@@ -376,25 +386,43 @@ function renderBreakdown(
   width: number,
   accent: "purple" | "orange" | "cyan",
 ): string[] {
+  // Token columns intentionally merge sub-components for TTY width:
+  // Out = output + reasoning, Cache = cacheRead + cacheWrite (same as
+  // formatTokenBreakdown and the table view). Raw splits remain available in
+  // stable JSON (UsageTotals keeps all five components separately).
+  // Row cap is DASHBOARD_ROW_CAP (12) for TTY height; the piped table uses
+  // TABLE_ROW_CAP (20) for logs. Different caps are intentional — dashboard
+  // prioritizes fitting without scroll, table prioritizes completeness.
   const lines = [panelHeading(title, width, color, accent)];
   if (values.length === 0) {
     return [...lines, width < 32 ? "  (none)" : "  No breakdown data recorded."];
   }
-  const visible = values.slice(0, 12);
+  const visible = values.slice(0, DASHBOARD_ROW_CAP);
   const isProvider = title.toLowerCase().includes("provider");
   const nameWidth = Math.max(8, Math.min(42, Math.floor(width * 0.42)));
-  // Table-aligned In/Out/Cache columns: header already shows labels, rows show only numbers.
+  const showTokenDetails = width >= 70;
+  const showCost = width >= 32;
+  // Table-aligned In/Out/Cache/Cost columns: header already shows labels, rows show only numbers.
   const inStrs = visible.map((item) => formatTokenCount(item.totals.input));
   const outStrs = visible.map((item) => formatTokenCount(item.totals.output + item.totals.reasoning));
   const cacheStrs = visible.map((item) => formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite));
+  const costStrs = visible.map((item) => formatCost(item.cost));
   const inWidth = Math.max("In".length, ...inStrs.map((s) => [...s].length));
   const outWidth = Math.max("Out".length, ...outStrs.map((s) => [...s].length));
   const cacheWidth = Math.max("Cache".length, ...cacheStrs.map((s) => [...s].length));
+  const costWidth = Math.max("Cost".length, ...costStrs.map((s) => [...s].length));
   // Header uses same column widths so values line up vertically (right-aligned numbers).
   const headerIn = themeIn("In".padStart(inWidth), color);
   const headerOut = themeOut("Out".padStart(outWidth), color);
   const headerCache = themeCache("Cache".padStart(cacheWidth), color);
-  const details = width < 70 ? "" : `  ${headerIn} ${headerOut} ${headerCache}`;
+  const headerCost = themeCost("Cost".padStart(costWidth), color);
+  const details = showTokenDetails
+    ? showCost
+      ? `  ${headerIn} ${headerOut} ${headerCache}  ${headerCost}`
+      : `  ${headerIn} ${headerOut} ${headerCache}`
+    : showCost
+      ? `  ${headerCost}`
+      : "";
   lines.push(`  ${themePurple("NAME".padEnd(nameWidth), color, true)} ${themeOrange("RECORDED".padStart(8), color, true)}${details}`);
   for (const item of visible) {
     const rawName = item.provider ? `${safeIdentifier(item.provider)}/${safeIdentifier(item.name)}` : safeIdentifier(item.name);
@@ -403,10 +431,18 @@ function renderBreakdown(
     const inPlain = formatTokenCount(item.totals.input);
     const outPlain = formatTokenCount(item.totals.output + item.totals.reasoning);
     const cachePlain = formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite);
+    const costPlain = formatCost(item.cost);
     const inCol = themeIn(inPlain.padStart(inWidth), color);
     const outCol = themeOut(outPlain.padStart(outWidth), color);
     const cacheCol = themeCache(cachePlain.padStart(cacheWidth), color);
-    const componentDetails = width < 70 ? "" : `  ${inCol} ${outCol} ${cacheCol}`;
+    const costCol = themeCost(costPlain.padStart(costWidth), color);
+    const componentDetails = showTokenDetails
+      ? showCost
+        ? `  ${inCol} ${outCol} ${cacheCol}  ${costCol}`
+        : `  ${inCol} ${outCol} ${cacheCol}`
+      : showCost
+        ? `  ${costCol}`
+        : "";
     if (isProvider) {
       const accentForRow = providerAccent(item.name, color, true);
       const countColored = accentForRow(countText.trimStart().padStart(8));
@@ -468,7 +504,7 @@ function renderSettingsPanel(
   const inner = Math.max(1, panelWidth - 2);
   const leftPad = Math.max(0, Math.floor((width - panelWidth) / 2));
   const padPrefix = " ".repeat(leftPad);
-  const providers: readonly string[] = ["opencode", "codex", "antigravity"];
+  const providers: readonly string[] = [...ALL_PROVIDER_KINDS];
   const intervalStr = formatRefreshInterval(settings.refreshIntervalSeconds);
   const presetIdx = presetIndex(settings.refreshIntervalSeconds);
   const pct = presetIdx / (REFRESH_PRESETS.length - 1);
@@ -622,13 +658,29 @@ function renderProjectsPanel(
     lines.push(padPrefix + `│${pad(themePurple(truncate("Tip: run a session in a project folder and refresh.", inner), color), inner)}│`);
   } else {
     const visible = projects.slice(0, 10);
+    const showCost = inner >= 50;
+    let costWidth = 0;
+    let headerCost = "";
+    if (showCost) {
+      const costStrs = visible.map((entry) => formatCost(entry.cost));
+      const winCostStr = formatCost(snapshot.windows[selected]?.cost);
+      const allCostStrs = [...costStrs, winCostStr];
+      costWidth = Math.max("Cost".length, ...allCostStrs.map((s) => [...s].length));
+      headerCost = themeCost("Cost".padStart(costWidth), color);
+    }
     // Header row
     const nameWidth = Math.max(12, Math.min(36, Math.floor(inner * 0.52)));
     const headerName = themePurple("PROJECT".padEnd(nameWidth), color, true);
     const headerRecorded = themeOrange("RECORDED".padStart(9), color, true);
     const headerPct = themePurple("%".padStart(4), color);
-    lines.push(padPrefix + `│${pad(`  ${headerName} ${headerRecorded} ${headerPct}`, inner)}│`);
-    lines.push(padPrefix + `│${pad(`  ${themePurple("─".repeat(nameWidth), color)} ${themePurple("─".repeat(9), color)} ${themePurple("─".repeat(4), color)}`, inner)}│`);
+    const header = showCost
+      ? `  ${headerName} ${headerRecorded} ${headerPct} ${headerCost}`
+      : `  ${headerName} ${headerRecorded} ${headerPct}`;
+    lines.push(padPrefix + `│${pad(header, inner)}│`);
+    const separator = showCost
+      ? `  ${themePurple("─".repeat(nameWidth), color)} ${themePurple("─".repeat(9), color)} ${themePurple("─".repeat(4), color)} ${themePurple("─".repeat(costWidth), color)}`
+      : `  ${themePurple("─".repeat(nameWidth), color)} ${themePurple("─".repeat(9), color)} ${themePurple("─".repeat(4), color)}`;
+    lines.push(padPrefix + `│${pad(separator, inner)}│`);
     for (const entry of visible) {
       const pct = totalForWindow > 0 ? Math.round((entry.totals.recorded_total / totalForWindow) * 100) : 0;
       const count = formatTokenCount(entry.totals.recorded_total).padStart(9);
@@ -646,13 +698,28 @@ function renderProjectsPanel(
       const nameColored = themeCyan(safe.padEnd(nameWidth), color, true);
       const countColored = themeOrange(count, color, true);
       const pctColored = themePurple(pctStr, color);
-      lines.push(padPrefix + `│${pad(`  ${nameColored} ${countColored} ${pctColored}`, inner)}│`);
+      if (showCost) {
+        const costColored = themeCost(formatCost(entry.cost).padStart(costWidth), color);
+        lines.push(padPrefix + `│${pad(`  ${nameColored} ${countColored} ${pctColored} ${costColored}`, inner)}│`);
+      } else {
+        lines.push(padPrefix + `│${pad(`  ${nameColored} ${countColored} ${pctColored}`, inner)}│`);
+      }
       // Second line with breakdown In/Out/Cache for that project under narrow? Only if inner wide
       if (inner >= 50) {
         const breakdown = formatTokenBreakdown(entry.totals);
-        const breakdownTrunc = truncate(breakdown, inner - 4);
-        const coloredBreakdown = colorizeBreakdown(breakdownTrunc, color);
-        lines.push(padPrefix + `│${pad(`    ${themePurple(coloredBreakdown, color)}`, inner)}│`);
+        if (showCost) {
+          const costStr = formatCost(entry.cost);
+          const availForBreakdown = Math.max(1, inner - 4 - 2 - [...costStr].length);
+          const breakdownTrunc = truncate(breakdown, availForBreakdown);
+          const coloredBreakdown = colorizeBreakdown(breakdownTrunc, color);
+          const coloredCost = themeCost(costStr, color);
+          const combined = `${coloredBreakdown}  ${coloredCost}`;
+          lines.push(padPrefix + `│${pad(`    ${combined}`, inner)}│`);
+        } else {
+          const breakdownTrunc = truncate(breakdown, inner - 4);
+          const coloredBreakdown = colorizeBreakdown(breakdownTrunc, color);
+          lines.push(padPrefix + `│${pad(`    ${themePurple(coloredBreakdown, color)}`, inner)}│`);
+        }
       }
     }
     if (projects.length > visible.length) {
@@ -660,7 +727,10 @@ function renderProjectsPanel(
       lines.push(padPrefix + `│${pad(`  ${themePurple(more, color)}`, inner)}│`);
     }
     lines.push(padPrefix + `│${" ".repeat(inner)}│`);
-    const totalLine = `Total projects: ${projects.length}  ·  Period total: ${formatTokenCount(totalForWindow)}`;
+    const windowCostStr = formatCost(snapshot.windows[selected]?.cost);
+    const totalLine = showCost
+      ? `Total projects: ${projects.length}  ·  Period total: ${formatTokenCount(totalForWindow)}  ·  Period cost: ${windowCostStr}`
+      : `Total projects: ${projects.length}  ·  Period total: ${formatTokenCount(totalForWindow)}`;
     lines.push(padPrefix + `│${pad(themePurple(truncate(totalLine, inner), color), inner)}│`);
   }
 

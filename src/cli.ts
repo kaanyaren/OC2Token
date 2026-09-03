@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import { basename } from "node:path";
+import { createRequire } from "node:module";
 
 import {
   ANSI,
@@ -30,15 +31,47 @@ import { runOpenCodeDoctor } from "./opencode/index.js";
 import { runCodexDoctor } from "./codex/doctor.js";
 import { runAntigravityDoctor } from "./antigravity/doctor.js";
 import {
+  ALL_PROVIDER_KINDS,
+  SETTINGS_DEFAULT_REFRESH_SECONDS,
   SETTINGS_MAX_REFRESH_SECONDS,
   SETTINGS_MIN_REFRESH_SECONDS,
   adjustRefreshIntervalByPreset,
   clampRefreshIntervalSeconds,
   loadDashboardSettings,
   saveDashboardSettings,
+  type DashboardSettings,
 } from "./dashboard/settings/index.js";
 
-const VERSION = "0.1.0";
+/**
+ * CLI version is read from package.json (not hardcoded) so `--version` and
+ * `--help` cannot drift. Falls back to "0.1.1" when the manifest is
+ * unreachable (e.g. unusual bundling). Tries both src (`../package.json`)
+ * and dist (`../../package.json`) layouts.
+ */
+function resolveCliVersion(): string {
+  try {
+    const require = createRequire(import.meta.url);
+    for (const candidate of ["../package.json", "../../package.json"]) {
+      try {
+        const pkg = require(candidate) as { version?: unknown };
+        if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
+      } catch {
+        // Try the next candidate layout.
+      }
+    }
+  } catch {
+    // createRequire itself failed — fall through to the fallback below.
+  }
+  return "0.1.1";
+}
+
+const VERSION = resolveCliVersion();
+/**
+ * Error envelope version. Distinct from stable snapshot `schemaVersion: 4`
+ * (see src/output/json.ts JSON_SCHEMA_VERSION): error payloads use
+ * `errorSchemaVersion` so parsers never confuse an error for data.
+ */
+const ERROR_SCHEMA_VERSION = 1 as const;
 const DEFAULT_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 interface CliOptions {
@@ -75,7 +108,9 @@ Options:
   --once                 Collect once and exit
   --json                 Emit stable JSON and exit
   --format <mode>        auto, dashboard, table, or json
-  --refresh <seconds>    Automatic refresh cadence; 0 is manual-only
+  --refresh <seconds>    Auto-refresh cadence; 0 is manual-only, or 60-14400 (1m-4h).
+                       With 0 the settings panel shows persisted value or 300s
+                       default while auto-refresh stays off.
   --timezone <IANA>      Time zone for local day and ISO week boundaries
   --project <id>         Restrict collection to an OpenCode project
   --cache-dir <path>     Override the normalized metadata cache directory
@@ -212,10 +247,18 @@ function dashboardInput(
 function writeError(io: CliIO, error: unknown, json: boolean): void {
   const message = error instanceof Error ? error.message : String(error);
   if (json) {
-    io.stdout.write(`${JSON.stringify({ schemaVersion: 1, error: { code: "oc2token", message } })}\n`);
+    // Error contract: { errorSchemaVersion: 1, error: { code, message } }.
+    // Deliberately NOT `schemaVersion` — that field means stable data (v4).
+    io.stdout.write(`${JSON.stringify({ errorSchemaVersion: ERROR_SCHEMA_VERSION, error: { code: "oc2token", message } })}\n`);
   } else {
     io.stderr.write(`oc2token: ${message}\n`);
   }
+}
+
+/** Debug-only stderr logging for swallowed runtime errors (applySettings etc.). */
+function debugWarn(io: CliIO, context: string, error: unknown): void {
+  if (process.env.OC2TOKEN_DEBUG === undefined && process.env.DEBUG?.includes("oc2token") !== true) return;
+  io.stderr.write(`oc2token [debug] ${context}: ${error instanceof Error ? error.message : String(error)}\n`);
 }
 
 function requestedJSON(args: readonly string[]): boolean {
@@ -308,6 +351,41 @@ async function runOnce(options: CliOptions, io: CliIO): Promise<number> {
   return result.coverage.complete ? 0 : 3;
 }
 
+/**
+ * Single clamp policy for refresh intervals. 0 is manual-only (scheduler
+ * disabled, no auto timer) and is never clamped; every other value is
+ * clamped to 60..14400 (1 minute to 4 hours). The settings panel cannot
+ * represent manual mode, so when the scheduler is 0 the panel shows the
+ * persisted value or the 300s default while auto-refresh stays off.
+ */
+function resolveInitialRefreshIntervals(
+  explicitSeconds: number | undefined,
+  persisted: DashboardSettings | undefined,
+  fallbackSeconds: number,
+): { schedulerInterval: number; settingsInterval: number } {
+  if (explicitSeconds !== undefined) {
+    if (explicitSeconds === 0) {
+      return {
+        schedulerInterval: 0,
+        settingsInterval: persisted !== undefined
+          ? clampRefreshIntervalSeconds(persisted.refreshIntervalSeconds)
+          : SETTINGS_DEFAULT_REFRESH_SECONDS,
+      };
+    }
+    const clamped = clampRefreshIntervalSeconds(explicitSeconds);
+    return { schedulerInterval: clamped, settingsInterval: clamped };
+  }
+  if (persisted !== undefined) {
+    const clamped = clampRefreshIntervalSeconds(persisted.refreshIntervalSeconds);
+    return { schedulerInterval: clamped, settingsInterval: clamped };
+  }
+  if (fallbackSeconds === 0) {
+    return { schedulerInterval: 0, settingsInterval: SETTINGS_DEFAULT_REFRESH_SECONDS };
+  }
+  const clamped = clampRefreshIntervalSeconds(fallbackSeconds);
+  return { schedulerInterval: clamped, settingsInterval: clamped };
+}
+
 async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   if (!io.stdout.isTTY || !io.stdin.isTTY) {
     return runOnce({ ...options, once: true }, io);
@@ -319,7 +397,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
 
   // Load persisted settings and merge with CLI options. CLI explicit flags win.
   const persisted = await loadDashboardSettings(options.cacheDirectory);
-  const ALL_KINDS: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
+  const ALL_KINDS: readonly ProviderKind[] = ALL_PROVIDER_KINDS;
 
   let initialSettingsEnabled: ProviderKind[];
   if (options.filterExplicit) {
@@ -334,35 +412,12 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   initialSettingsEnabled = initialSettingsEnabled.filter((k): k is ProviderKind => ALL_KINDS.includes(k as ProviderKind));
   if (initialSettingsEnabled.length === 0) initialSettingsEnabled = [...ALL_KINDS];
 
-  let initialSchedulerInterval: number;
-  let initialSettingsInterval: number;
-  if (options.refreshExplicit) {
-    initialSchedulerInterval = options.refreshIntervalSeconds;
-    initialSettingsInterval = initialSchedulerInterval === 0
-      ? SETTINGS_MIN_REFRESH_SECONDS
-      : clampRefreshIntervalSeconds(initialSchedulerInterval);
-    // Clamp scheduler interval for settings range if explicit but out of bounds? Keep explicit 0 as manual, otherwise clamp
-    if (initialSchedulerInterval !== 0) {
-      initialSchedulerInterval = clampRefreshIntervalSeconds(initialSchedulerInterval);
-    }
-  } else if (persisted !== undefined) {
-    initialSchedulerInterval = clampRefreshIntervalSeconds(persisted.refreshIntervalSeconds);
-    initialSettingsInterval = initialSchedulerInterval;
-  } else {
-    initialSchedulerInterval = options.refreshIntervalSeconds;
-    if (initialSchedulerInterval !== 0) {
-      initialSchedulerInterval = clampRefreshIntervalSeconds(initialSchedulerInterval);
-    }
-    initialSettingsInterval = initialSchedulerInterval === 0
-      ? SETTINGS_MIN_REFRESH_SECONDS
-      : clampRefreshIntervalSeconds(initialSchedulerInterval);
-    // Also respect the min/max for initial settings: if scheduler is 0 manual, settings defaults to 300
-    if (options.refreshIntervalSeconds === 0) {
-      initialSettingsInterval = 300;
-    }
-  }
-  // Ensure settings interval always within 1m..4h
-  initialSettingsInterval = clampRefreshIntervalSeconds(initialSettingsInterval);
+  const { schedulerInterval: initialSchedulerInterval, settingsInterval: initialSettingsInterval } =
+    resolveInitialRefreshIntervals(
+      options.refreshExplicit ? options.refreshIntervalSeconds : undefined,
+      persisted,
+      options.refreshIntervalSeconds,
+    );
 
   const initialFilterForSource = initialSettingsEnabled.length === ALL_KINDS.length
     ? undefined
@@ -425,10 +480,14 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       // Unified source is mutated via CachedUsageSource delegation
       try {
         adapterSource.source.setFilterProviders(newFilter);
-      } catch {}
+      } catch (error) {
+        debugWarn(io, "setFilterProviders (cached source) failed", error);
+      }
       try {
         adapterSource.unified.setFilterProviders(newFilter);
-      } catch {}
+      } catch (error) {
+        debugWarn(io, "setFilterProviders (unified source) failed", error);
+      }
       appliedEnabled = new Set(settingsState.enabledProviders);
       void coordinator.manualRefresh();
       persistCurrentSettings();
@@ -442,7 +501,9 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     if (clamped !== appliedInterval) {
       try {
         coordinator.setRefreshIntervalSeconds(clamped);
-      } catch {}
+      } catch (error) {
+        debugWarn(io, "setRefreshIntervalSeconds failed", error);
+      }
       appliedInterval = clamped;
       persistCurrentSettings();
     }
@@ -498,7 +559,39 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   void coordinator.start().catch(() => undefined);
 
   let inputBuffer = "";
+  let escapeFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearEscapeFlush = (): void => {
+    if (escapeFlushTimer !== undefined) {
+      clearTimeout(escapeFlushTimer);
+      escapeFlushTimer = undefined;
+    }
+  };
+  const flushBufferedEscapeAsKey = (): void => {
+    // A bare trailing ESC / ESC[ with no continuation after 50ms was a lone
+    // ESC keypress, not a split sequence — handle it as the ESC key.
+    escapeFlushTimer = undefined;
+    if (inputBuffer !== "\u001b" && inputBuffer !== "\u001b[") return;
+    inputBuffer = "";
+    if (settingsState.visible) {
+      settingsState.visible = false;
+      draw();
+    } else if (projectsVisible) {
+      projectsVisible = false;
+      draw();
+    } else if (help) {
+      help = false;
+      draw();
+    }
+  };
+  const scheduleEscapeFlush = (): void => {
+    clearEscapeFlush();
+    escapeFlushTimer = setTimeout(flushBufferedEscapeAsKey, 50);
+    if (typeof escapeFlushTimer === "object" && escapeFlushTimer !== null && "unref" in escapeFlushTimer) {
+      (escapeFlushTimer as unknown as { unref(): void }).unref();
+    }
+  };
   const onInput = (chunk: Buffer | string) => {
+    clearEscapeFlush();
     inputBuffer += chunk.toString();
     const value = inputBuffer;
     inputBuffer = "";
@@ -515,6 +608,14 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     };
     let i = 0;
     while (i < value.length) {
+      // Lone trailing ESC may be the first byte of a split sequence
+      // ("\x1b" + "[A" across chunks). Buffer it and wait briefly; a lone
+      // ESC keypress flushes via scheduleEscapeFlush after 50ms.
+      if (value[i] === "\u001b" && i === value.length - 1) {
+        inputBuffer = value.slice(i);
+        scheduleEscapeFlush();
+        break;
+      }
       // SGR mouse click: \x1b[<Cb;Cx;CyM (press) / m (release)
       if (value.startsWith("\u001b[<", i)) {
         const termM = value.indexOf("M", i + 3);
@@ -566,7 +667,14 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           i += 3;
           continue;
         }
-        if (i + 2 < value.length) {
+        // Buffer an incomplete CSI split across data chunks (e.g. chunk ends
+        // with "\x1b[" and "A" arrives next). The old `else i += 1` dropped it.
+        if (i + 2 >= value.length) {
+          inputBuffer = value.slice(i);
+          scheduleEscapeFlush();
+          break;
+        }
+        {
           const code = value[i + 2];
           if (settingsState.visible) {
             if (code === "A") {
@@ -711,8 +819,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         }
         if (key === " ") {
           if (settingsState.focusedIndex >= 0 && settingsState.focusedIndex <= 2) {
-            const provs: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
-            const prov = provs[settingsState.focusedIndex]!;
+            const prov = ALL_KINDS[settingsState.focusedIndex]!;
             if (settingsState.enabledProviders.has(prov)) {
               if (settingsState.enabledProviders.size > 1) {
                 settingsState.enabledProviders.delete(prov);
@@ -788,8 +895,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         }
         if (key === "\r" || key === "\n") {
           if (settingsState.focusedIndex >= 0 && settingsState.focusedIndex <= 2) {
-            const provs: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
-            const prov = provs[settingsState.focusedIndex]!;
+            const prov = ALL_KINDS[settingsState.focusedIndex]!;
             if (settingsState.enabledProviders.has(prov)) {
               if (settingsState.enabledProviders.size > 1) {
                 settingsState.enabledProviders.delete(prov);
@@ -870,14 +976,42 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     }
   };
   io.stdin.on("data", onInput);
-  const heartbeat = setInterval(draw, 1_000);
+  // Heartbeat is gated, not a blind 1s redraw: it fires only on clock
+  // rollover (countdown text changes each second) or while a refresh is in
+  // flight (spinner/progress). Idle dashboards skip redraw to save CPU.
+  let lastHeartbeatSecond = Math.floor(Number(process.hrtime.bigint()) / 1_000_000_000);
+  const heartbeat = setInterval(() => {
+    if (!running) return;
+    const state = coordinator.getState();
+    const second = Math.floor(clock.monotonicNow() / 1000);
+    const active = state.status === "refreshing";
+    if (active || second !== lastHeartbeatSecond) {
+      lastHeartbeatSecond = second;
+      draw();
+    }
+  }, 1_000);
+  if (typeof heartbeat === "object" && heartbeat !== null && "unref" in heartbeat) {
+    (heartbeat as unknown as { unref(): void }).unref();
+  }
+  // Resize is debounced (120ms) so rapid terminal resizes render once.
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  const onResize = (): void => {
+    if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = undefined;
+      if (running) draw();
+    }, 120);
+  };
+  io.stdout.on("resize", onResize);
   await new Promise<void>((resolve) => {
     const check = () => running ? setTimeout(check, 25) : resolve();
     check();
   });
   clearInterval(heartbeat);
+  if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+  clearEscapeFlush();
   io.stdin.off("data", onInput);
-  io.stdout.off("resize", draw);
+  io.stdout.off("resize", onResize);
   process.off("SIGINT", onSignal);
   process.off("SIGTERM", onSignal);
   return 0;

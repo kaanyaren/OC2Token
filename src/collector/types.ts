@@ -82,6 +82,14 @@ export interface CollectorOptions {
   readonly maxRetries?: number;
   readonly retryDelayMs?: number;
   readonly maxWorkers?: number;
+  /**
+   * Maximum paginated pages read per list (session discovery per parent, and
+   * messages per session). Bounds infinite cursor loops; exceeded bounds are
+   * reported as protocol coverage errors, not fatal throws.
+   */
+  readonly maxPages?: number;
+  /** Maximum sessions held from discovery before scanning starts. */
+  readonly maxSessions?: number;
 }
 
 export function intervalUnion(

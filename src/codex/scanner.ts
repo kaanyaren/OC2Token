@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { promises as nodeFs } from "node:fs";
 import { basename } from "node:path";
 
 import { createUsageRecord, containsInstant, sumUsageRecords } from "../domain/index.js";
@@ -50,6 +50,23 @@ function sortedErrors(errors: ReadonlyArray<CollectionError>): ReadonlyArray<Col
       String(b.sessionID ?? "") + "\0" + b.code + "\0" + b.message,
     ),
   );
+}
+
+/**
+ * Upper bound for a single rollout file read. Files larger than this are
+ * skipped with a coverage error instead of being loaded into memory, so one
+ * giant JSONL cannot OOM the scanner.
+ */
+const MAX_ROLLOUT_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Domain record IDs reject "/" (it joins the stable `session/message` key)
+ * while cache SAFE_ID permits it. Rollout payloads are untrusted input, so
+ * sanitize every ID derived from them: slashes and control chars become "_".
+ */
+function sanitizeRecordID(value: string, fallback: string): string {
+  const cleaned = value.replace(/[\u0000-\u001f/]/g, "_").trim();
+  return cleaned.length > 0 ? cleaned : fallback;
 }
 
 /**
@@ -113,7 +130,22 @@ export async function collectCodex(request: CollectionRequest): Promise<Collecti
 
     let content: string;
     try {
-      content = readFileSync(filePath, "utf-8");
+      // Size guard first: never load a giant rollout file into memory.
+      const stat = await nodeFs.stat(filePath);
+      if (stat.size > MAX_ROLLOUT_BYTES) {
+        mutable.sessionsSkipped += 1;
+        mutable.errors.push(
+          toCollectionError(
+            new DomainError("invalid-data", `Codex rollout file exceeds ${MAX_ROLLOUT_BYTES} bytes`, {
+              sessionID: basename(filePath, ".jsonl"),
+            }),
+            "invalid-data",
+            basename(filePath, ".jsonl"),
+          ),
+        );
+        continue;
+      }
+      content = await nodeFs.readFile(filePath, "utf-8");
     } catch (error) {
       if (isCancellationError(error)) {
         throw cancellationError();
@@ -178,10 +210,11 @@ export async function collectCodex(request: CollectionRequest): Promise<Collecti
       if (rec.type === "session_meta") {
         const payload = (rec.payload ?? {}) as Record<string, unknown>;
         const sid = payload.session_id ?? (payload as Record<string, unknown>).sessionId;
+        const fileFallback = sanitizeRecordID(basename(filePath, ".jsonl"), "codex-session");
         if (typeof sid === "string" && sid.trim().length > 0) {
-          sessionId = sid;
+          sessionId = sanitizeRecordID(sid, fileFallback);
         } else {
-          sessionId = basename(filePath, ".jsonl");
+          sessionId = fileFallback;
         }
 
         const tsRaw = rec.timestamp;
@@ -242,7 +275,7 @@ export async function collectCodex(request: CollectionRequest): Promise<Collecti
       }
 
       if (sessionId === undefined) {
-        sessionId = basename(filePath, ".jsonl");
+        sessionId = sanitizeRecordID(basename(filePath, ".jsonl"), "codex-session");
       }
       // capture cwd from token_count payload if not yet known
       if (sessionProject === undefined) {
@@ -294,17 +327,15 @@ export async function collectCodex(request: CollectionRequest): Promise<Collecti
         continue;
       }
 
-      // Fork guard: skip if event.timestamp < session_meta.timestamp + 5s
+      // Fork guard: skip if event.timestamp < session_meta.timestamp + 5s.
+      // (Single check — a duplicated second check was removed; one
+      // comparison against forkCutoffMs is the whole guard.)
       if (
         sessionMetaTimestampMs !== undefined &&
         forkCutoffMs !== undefined &&
         eventTsMs !== undefined &&
         eventTsMs < forkCutoffMs
       ) {
-        continue;
-      }
-      // Additional guard exactly as codeburn second check (redundant but deterministic)
-      if (forkCutoffMs !== undefined && eventTsMs !== undefined && eventTsMs < forkCutoffMs) {
         continue;
       }
 
@@ -413,6 +444,9 @@ export async function collectCodex(request: CollectionRequest): Promise<Collecti
       }
 
       // dedupKey = codex:{sessionId}:{total.total_tokens}:{total.input}:{total.cached}:{total.output}:{total.reasoning}
+      // sessionId is already sanitized, but sanitize the composed key too:
+      // messageID rejects "/" at the domain boundary, so any stray slash
+      // (e.g. from a hostile session_id) must never reach createUsageRecord.
       const totalInputForKey =
         totalRaw !== null && typeof totalRaw.input_tokens === "number" ? totalRaw.input_tokens : 0;
       const totalCachedForKey =
@@ -425,7 +459,10 @@ export async function collectCodex(request: CollectionRequest): Promise<Collecti
         totalRaw !== null && typeof totalRaw.reasoning_output_tokens === "number"
           ? totalRaw.reasoning_output_tokens
           : 0;
-      const dedupKey = `codex:${sessionId}:${cumulativeTotal}:${totalInputForKey}:${totalCachedForKey}:${totalOutputForKey}:${totalReasoningForKey}`;
+      const dedupKey = sanitizeRecordID(
+        `codex:${sessionId}:${cumulativeTotal}:${totalInputForKey}:${totalCachedForKey}:${totalOutputForKey}:${totalReasoningForKey}`,
+        `codex:${sessionId}:${cumulativeTotal}`,
+      );
 
       try {
         const record: UsageRecord = createUsageRecord({

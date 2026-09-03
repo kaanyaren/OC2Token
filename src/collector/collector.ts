@@ -35,12 +35,16 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_MAX_WORKERS = 4;
 const MAX_WORKERS = 32;
 const MAX_PAGE_LIMIT = 1_000;
+const DEFAULT_MAX_PAGES = 10_000;
+const DEFAULT_MAX_SESSIONS = 50_000;
 
 interface ResolvedOptions {
   readonly pageLimit: number;
   readonly maxRetries: number;
   readonly retryDelayMs: number;
   readonly maxWorkers: number;
+  readonly maxPages: number;
+  readonly maxSessions: number;
 }
 
 interface MutableCoverage {
@@ -120,7 +124,9 @@ function resolvedOptions(
   if (pageLimit > MAX_PAGE_LIMIT) {
     throw new RangeError("pageLimit must not exceed " + MAX_PAGE_LIMIT);
   }
-  return { pageLimit, maxRetries, retryDelayMs, maxWorkers };
+  const maxPages = positiveInteger(defaults.maxPages, DEFAULT_MAX_PAGES, "maxPages");
+  const maxSessions = positiveInteger(defaults.maxSessions, DEFAULT_MAX_SESSIONS, "maxSessions");
+  return { pageLimit, maxRetries, retryDelayMs, maxWorkers, maxPages, maxSessions };
 }
 
 function sessionIDOf(session: SessionSummary): string {
@@ -203,7 +209,11 @@ function statusOf(error: unknown): number | undefined {
 
 function isRetryableReadError(error: unknown): boolean {
   if (isCancellationError(error)) return false;
-  if (error instanceof DomainError) return error.retryable;
+  // Single-layer retry: the transport (retryingRead) already retries classified
+  // DomainError failures, so retrying them here would stack budgets (e.g. 3x3).
+  // The collector only retries raw transient failures from transports without
+  // an internal retry boundary (plain status-tagged errors, ECONN*, timeouts).
+  if (error instanceof DomainError) return false;
   const status = statusOf(error);
   if (status !== undefined) {
     return status === 408 || status === 425 || status === 429 || status >= 500;
@@ -225,11 +235,17 @@ function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promise<void
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
+    let onAbort: (() => void) | undefined;
+    const timer = setTimeout(() => {
+      if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    onAbort = () => {
       clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort!);
       reject(cancellationError());
-    }, { once: true });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -282,6 +298,11 @@ function parseDate(value: unknown, field: string): Date {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new DomainError("invalid-data", field + " must be finite");
+    // Seconds-vs-milliseconds heuristic: values with |value| < 1e11 are treated
+    // as whole seconds (1e11 s is year 5138; 1e11 ms is 1973-03-03), because the
+    // API has returned both units historically. Fractional inputs are rejected
+    // by the Date constructor path via the finite check above combined with
+    // the integer expectation of millisecond timestamps elsewhere.
     const milliseconds = Math.abs(value) < 100_000_000_000 ? value * 1_000 : value;
     const date = new Date(milliseconds);
     if (!Number.isFinite(date.getTime())) {
@@ -330,13 +351,10 @@ function isExplicitlyProvisional(message: AssistantMessage): boolean {
 function projectForSession(session: SessionSummary): string | undefined {
   const direct = (session as Record<string, unknown>).project as unknown;
   if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
+  // Prefer the stable projectID over the human-readable directory: directories
+  // can vary across checkouts/symlinks while the ID stays joinable with stats.
   const pid = session.projectID;
-  if (typeof pid === "string" && pid.trim().length > 0) {
-    // Prefer directory when available for human readability, otherwise projectID
-    const dir = session.directory;
-    if (typeof dir === "string" && dir.trim().length > 0) return dir.trim();
-    return pid.trim();
-  }
+  if (typeof pid === "string" && pid.trim().length > 0) return pid.trim();
   const dir = session.directory;
   if (typeof dir === "string" && dir.trim().length > 0) return dir.trim();
   const location = (session as Record<string, unknown>).location as unknown;
@@ -450,8 +468,14 @@ async function discoverSessions(
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
     try {
-      for (;;) {
+      for (let pages = 0; ; pages += 1) {
         assertNotAborted(signal);
+        if (pages >= options.maxPages) {
+          throw new DomainError("protocol", "Session pagination exceeded its page bound");
+        }
+        if (sessions.size >= options.maxSessions) {
+          throw new DomainError("protocol", "Discovered sessions exceeded the session bound");
+        }
         const page = await readWithRetry(
           () => fetchPage({
             ...(cursor === undefined ? {} : { cursor }),
@@ -512,8 +536,15 @@ async function scanSession(
   const seenCursors = new Set<string>();
 
   try {
-    for (;;) {
+    for (let pages = 0; ; pages += 1) {
       assertNotAborted(signal);
+      if (pages >= options.maxPages) {
+        throw new DomainError(
+          "protocol",
+          "Message pagination for " + sessionID + " exceeded its page bound",
+          { sessionID },
+        );
+      }
       const page = await readWithRetry(
         () => {
           const input: ListMessagesRequest = {
@@ -540,7 +571,12 @@ async function scanSession(
           project,
         );
         observationOrdinal += 1;
-        if (normalizedMessage.provisional) provisionalMessages += 1;
+        // Count only genuine provisional records. Validation failures also
+        // carry provisional:true for reducer ordering but are already reported
+        // in errors[] and must not inflate the provisional message metric.
+        if (normalizedMessage.record !== undefined && normalizedMessage.record.completeness === "provisional") {
+          provisionalMessages += 1;
+        }
         if (normalizedMessage.error !== undefined) {
           errors.push(toCollectionError(normalizedMessage.error, "invalid-data", sessionID));
         }

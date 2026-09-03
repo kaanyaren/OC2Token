@@ -27,7 +27,6 @@ import {
   type OpenCodeTransportOptions,
   type StatsRequestOptions,
 } from "./transport.js";
-
 export interface OpenCodeAdapterOptions extends ConnectionOptions {
   readonly transport?: OpenCodeTransport;
   readonly pageSize?: number;
@@ -69,7 +68,7 @@ export class OpenCode2Adapter implements UsageSource {
       ...this.options,
       ...(signal === undefined ? {} : { signal }),
     });
-    this.installClient(this.connection.client);
+    this.installClient(this.connection.client, this.connection.endpoint.url);
     return this.connection;
   }
 
@@ -84,11 +83,11 @@ export class OpenCode2Adapter implements UsageSource {
   async ensure(): Promise<Endpoint> {
     const connection = await connectOpenCode({ ...this.options, ensure: true });
     this.connection = connection;
-    this.installClient(connection.client);
+    this.installClient(connection.client, connection.endpoint.url);
     return connection.endpoint;
   }
 
-  private installClient(client: OpenCodeClientLike): void {
+  private installClient(client: OpenCodeClientLike, endpointUrl?: string): void {
     const transportOptions: OpenCodeTransportOptions = {
       client,
       pageSize: this.options.pageSize,
@@ -99,8 +98,16 @@ export class OpenCode2Adapter implements UsageSource {
       random: this.options.random,
       sleep: this.options.sleep,
       requestTimeoutMs: this.options.requestTimeoutMs,
+      ...(endpointUrl === undefined ? {} : { endpointUrl }),
     };
+    const previous = this.transportValue;
     this.transportValue = new OpenCode2Transport(transportOptions);
+    // Preserve a previously known endpoint when the new install has none
+    // (e.g. constructor-injected clients), so fingerprints stay stable.
+    if (endpointUrl === undefined && previous instanceof OpenCode2Transport && previous.endpointUrl !== undefined) {
+      const created = this.transportValue;
+      if (created instanceof OpenCode2Transport) created.setEndpointUrl(previous.endpointUrl);
+    }
     this.statsSource = new OpenCodeStatsSource(this.transportValue);
   }
 

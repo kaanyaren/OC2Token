@@ -135,11 +135,30 @@ function readHealth(value: unknown, endpoint: Endpoint): OpenCodeHealth {
     throw new DomainError("invalid-data", "OpenCode health response has an invalid pid");
   }
 
+  return { version: value.version, fingerprint: fingerprintForHealth(endpoint.url, value.version, pid) };
+}
+
+/**
+ * Stable service fingerprint shared with the transport layer.
+ *
+ * The fingerprint is `sha256(url + NUL + version + NUL + pid)` truncated to 24
+ * hex chars. It intentionally changes on restart (new PID), version upgrade,
+ * or endpoint change so HybridUsageSource can re-probe stats support, while
+ * never hashing auth credentials (the URL is the advertised endpoint, not the
+ * request header).
+ */
+export function fingerprintForHealth(
+  endpointUrl: string | undefined,
+  version: string,
+  pid: unknown,
+): string {
   // Never hash or report the basic-auth password.  The URL is the advertised
   // endpoint, not the credential-bearing request header.
-  const fingerprintInput = `${endpoint.url}\u0000${value.version}\u0000${pid ?? ""}`;
-  const fingerprint = createHash("sha256").update(fingerprintInput).digest("hex").slice(0, 24);
-  return { version: value.version, fingerprint };
+  const normalizedPid = typeof pid === "number" && Number.isSafeInteger(pid) && pid >= 0
+    ? String(pid)
+    : "";
+  const fingerprintInput = `${endpointUrl ?? ""}\u0000${version}\u0000${normalizedPid}`;
+  return createHash("sha256").update(fingerprintInput).digest("hex").slice(0, 24);
 }
 
 export function parseOpenCodeHealth(value: unknown, endpoint: Endpoint): OpenCodeHealth {

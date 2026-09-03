@@ -1,0 +1,14 @@
+# Keeps the @opencode-ai/client beta pin (and the rest of npm) fresh with weekly
+# PRs — betas move fast, so review these promptly. Check the pin any time with:
+#   npm outdated @opencode-ai/client
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

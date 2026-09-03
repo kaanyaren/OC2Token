@@ -426,20 +426,20 @@ function capturedIO(): CapturedIO {
 test("CLI help and JSON parse errors are available offline", async () => {
   const help = capturedIO();
   assert.equal(await main(["--help"], help.io), 0);
-  assert.match(help.stdout(), /oc2token 0\.1\.0/);
+  assert.match(help.stdout(), /oc2token 0\.1\.1/);
   assert.match(help.stdout(), /--refresh <seconds>/);
   assert.match(help.stdout(), /--timezone <IANA>/);
   assert.equal(help.stderr(), "");
 
   const version = capturedIO();
   assert.equal(await main(["--version"], version.io), 0);
-  assert.equal(version.stdout(), "0.1.0\n");
+  assert.equal(version.stdout(), "0.1.1\n");
   assert.equal(version.stderr(), "");
 
   const invalid = capturedIO();
   assert.equal(await main(["--json", "--refresh", "not-a-number"], invalid.io), 1);
-  const payload = JSON.parse(invalid.stdout()) as { schemaVersion: number; error: { code: string } };
-  assert.equal(payload.schemaVersion, 1);
+  const payload = JSON.parse(invalid.stdout()) as { errorSchemaVersion: number; error: { code: string } };
+  assert.equal(payload.errorSchemaVersion, 1);
   assert.equal(payload.error.code, "oc2token");
   assert.equal(invalid.stderr(), "");
 });
@@ -454,7 +454,7 @@ test("explicit JSON output serializes an injected collection without network acc
     totals: Record<string, { recorded_total: number }>;
   };
 
-  assert.equal(payload.schemaVersion, 3);
+  assert.equal(payload.schemaVersion, 4);
   assert.equal(payload.source, "stats");
   assert.equal(payload.windows.day.timezone, "UTC");
   assert.equal(payload.windows.hour.from, "2026-09-02T09:00:00.000Z");
@@ -466,8 +466,8 @@ test("format=json emits JSON for validation failures", async () => {
   const io = capturedIO();
   assert.equal(await main(["--format", "json", "--timezone", "Not/AZone"], io.io), 1);
   assert.match(io.stdout(), /^\{/);
-  const payload = JSON.parse(io.stdout()) as { schemaVersion: number; error: { code: string } };
-  assert.equal(payload.schemaVersion, 1);
+  const payload = JSON.parse(io.stdout()) as { errorSchemaVersion: number; error: { code: string } };
+  assert.equal(payload.errorSchemaVersion, 1);
   assert.equal(payload.error.code, "oc2token");
   assert.equal(io.stderr(), "");
 });

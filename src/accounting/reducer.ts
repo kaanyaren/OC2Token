@@ -1,17 +1,9 @@
-import {
-  parseTokenComponents,
-  toUsageTotals,
-  type TokenComponentName,
-  type TokenComponents,
-  type UsageTotals,
-} from "../domain/index.js";
+import type { UsageTotals } from "../domain/index.js";
 import {
   type UsageRecord,
   sumUsageRecords,
   type UsageWindow,
 } from "../domain/index.js";
-
-const COMPONENTS = ["input", "output", "reasoning", "cacheRead", "cacheWrite"] as const;
 
 function compareRevision(left: string, right: string): number {
   if (left === right) {
@@ -109,27 +101,4 @@ export function reduceUsageRecords(
   const reducer = new UsageRecordReducer();
   reducer.upsertMany(records);
   return reducer.records();
-}
-
-export function sumRecordComponents(records: ReadonlyArray<UsageRecord>): UsageTotals {
-  const totals: Record<TokenComponentName, number> = {
-    input: 0,
-    output: 0,
-    reasoning: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-  };
-
-  for (const record of records) {
-    const normalized = parseTokenComponents(record);
-    for (const component of COMPONENTS) {
-      const next = totals[component] + normalized[component];
-      if (!Number.isSafeInteger(next)) {
-        throw new RangeError(`Summing ${component} exceeds the safe integer range`);
-      }
-      totals[component] = next;
-    }
-  }
-
-  return toUsageTotals(totals);
 }

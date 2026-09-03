@@ -16,6 +16,7 @@ import {
   type UsageTrendsByWindow,
 } from "../domain/index.js";
 import type { StatsRequestOptions } from "./transport.js";
+import { isStatsRangeMismatch } from "./transport.js";
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new DomainError("cancelled", "The operation was cancelled");
@@ -100,13 +101,28 @@ async function collectTrendBuckets(
         to: new Date(bucket.to.getTime()),
         label: bucket.label,
       };
-      const result = await transport.getSessionStats(query, options);
-      results[index] = {
-        label: bucket.label,
-        from: new Date(bucket.from.getTime()),
-        to: new Date(bucket.to.getTime()),
-        totals: result.totals,
-      };
+      try {
+        const result = await transport.getSessionStats(query, options);
+        results[index] = {
+          label: bucket.label,
+          from: new Date(bucket.from.getTime()),
+          to: new Date(bucket.to.getTime()),
+          totals: result.totals,
+        };
+      } catch (error) {
+        if (isCancellationError(error) || (error instanceof DomainError && error.code === "cancelled")) {
+          throw error;
+        }
+        // A range mismatch means the server cannot honor bounded stats at all;
+        // propagate so HybridUsageSource falls back to the message scan for the
+        // whole refresh instead of returning silently gapped trends.
+        if (isStatsRangeMismatch(error)) throw error;
+        // Any other per-bucket failure (404, per-range 5xx after transport
+        // retries, malformed bucket payload) is isolated: the bucket is omitted
+        // and remaining buckets still resolve. Callers must treat a short
+        // bucket list as partial rather than complete.
+        results[index] = undefined;
+      }
     }
   }
 
@@ -138,12 +154,18 @@ export class OpenCodeStatsSource implements UsageSource {
 
     // Fetch project list once when not filtering to a single project.
     // Failures are non-fatal: the stats total remains usable without per-project split.
+    //
+    // Project filter heuristic: drop the synthetic global entries (`canonical
+    // === "/"` or `id === "global"`) which aggregate every project and would
+    // double-count if kept alongside per-project stats (they also typically
+    // return zero for a scoped query). All remaining projects are queried and
+    // only those with recorded_total > 0 are kept (see
+    // collectProjectBreakdowns); per-project failures are isolated and skipped
+    // rather than aborting the refresh.
     let allProjects: ReadonlyArray<OpenCodeProject> = [];
     if (request.project === undefined && typeof (this.transport as unknown as { listProjects?: unknown }).listProjects === "function") {
       try {
         const fetched = await (this.transport as unknown as { listProjects: (opts: unknown) => Promise<ReadonlyArray<OpenCodeProject>> }).listProjects({ signal: request.signal });
-        // Filter obvious non-project entries (global root) and keep only git-backed projects with recent activity?
-        // We keep all and filter by recorded_total>0 later; but skip the global "/" which typically returns 0.
         allProjects = (fetched as ReadonlyArray<OpenCodeProject>).filter((p) => p.canonical !== "/" && p.id !== "global");
       } catch (error) {
         if (isCancellationError(error) || (error instanceof DomainError && error.code === "cancelled")) throw error;

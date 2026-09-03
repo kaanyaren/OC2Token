@@ -24,6 +24,7 @@ import type {
 import { discoverAntigravityDatabases } from "./discovery.js";
 import {
   antigravitySqliteCreatedAt,
+  antigravitySqliteMetadataAttributes,
   antigravitySqliteModel,
   antigravitySqliteResponseId,
   firstProtoField,
@@ -287,6 +288,8 @@ export async function collectAntigravity(request: CollectionRequest): Promise<Co
             // ignore
           }
           retried = true;
+          // A successful open-retry is retried work: surface it in coverage.
+          mutable.jobsRetried += 1;
         } catch (retryError) {
           if (isCancellationError(retryError)) {
             throw cancellationError();
@@ -314,12 +317,189 @@ export async function collectAntigravity(request: CollectionRequest): Promise<Co
       continue;
     }
 
-    let rows: Array<{ idx: number; data: unknown }>;
+    // Stream rows via iterate() so a huge gen_metadata table is processed one
+    // row at a time instead of materializing via all(). The per-row body is a
+    // closure so the normal path and the single busy-retry path share it;
+    // re-processing after a mid-iteration retry is safe because reducer
+    // upserts are idempotent on the stable record key.
+    let fileHadRows = false;
+    let fileHadError = false;
+    let emptyUsageRows = 0;
+
+    const processRow = (row: { idx: number; data: unknown }): void => {
+      assertNotAborted(request.signal);
+
+      const idx = typeof row.idx === "number" ? row.idx : Number(row.idx);
+      const dataBytes = normalizeDataBytes(row.data);
+      if (dataBytes === null) {
+        return;
+      }
+
+      const rootFields = parseProtoFields(dataBytes);
+      const chatBytes = protoFieldBytes(firstProtoField(rootFields, 1));
+      const chatFields = parseProtoFields(chatBytes ?? new Uint8Array());
+      const usageBytes = protoFieldBytes(firstProtoField(chatFields, 4));
+      const usageFields = parseProtoFields(usageBytes ?? new Uint8Array());
+
+      if (usageFields.length === 0) {
+        // No usage payload in this row: nothing billable to record. Counted
+        // and surfaced as one aggregated coverage error per file below rather
+        // than silently skipped or per-row spam.
+        emptyUsageRows += 1;
+        return;
+      }
+
+      const inputTokens =
+        protoFieldPositiveInteger(firstProtoField(usageFields, 2)) ||
+        protoFieldPositiveInteger(firstProtoField(usageFields, 1));
+      const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3));
+      let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9));
+      let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10));
+
+      // Adjust logic mirrors codeburn buildCallFromSqliteGenMetadataRow:17255
+      if (responseTokens === 0 && thinkingTokens === 0) {
+        responseTokens = totalOutputTokens;
+      } else if (totalOutputTokens > 0 && responseTokens + thinkingTokens !== totalOutputTokens) {
+        const adjustedResponseTokens = totalOutputTokens - thinkingTokens;
+        if (adjustedResponseTokens >= 0) {
+          responseTokens = adjustedResponseTokens;
+        }
+      }
+
+      if (inputTokens === 0 && totalOutputTokens === 0) {
+        return;
+      }
+
+      const rawResponseId = antigravitySqliteResponseId(usageFields, String(idx));
+      // Domain messageIDs reject "/" (it joins the stable record key) while
+      // proto responseIds only exclude whitespace — sanitize before use.
+      const responseId = rawResponseId.replace(/[\u0000-\u001f/]/g, "_").trim() || String(idx);
+      const model = antigravitySqliteModel(chatFields);
+
+      let createdAt: Date | null = null;
+      const timestampIso = antigravitySqliteCreatedAt(chatFields);
+      if (timestampIso) {
+        const parsed = new Date(timestampIso);
+        if (!Number.isNaN(parsed.getTime())) {
+          createdAt = parsed;
+        }
+      }
+      // NOTE (mtime bucketing): when a row carries no proto timestamp every
+      // such row in this file falls back to the same file-mtime instant, so
+      // they all bucket into one window. That matches codeburn's
+      // assignStableTimestamps fallback, but it is a coarse approximation:
+      // per-row times are unknown and day/hour splits for these rows reflect
+      // file mtime, not actual generation time.
+      if (createdAt === null && fallbackDate !== undefined && !Number.isNaN(fallbackDate.getTime())) {
+        createdAt = new Date(fallbackDate.getTime());
+      }
+      if (createdAt === null) {
+        // No usable timestamp — skip record but count as error?
+        fileHadError = true;
+        mutable.errors.push(
+          toCollectionError(
+            new DomainError("invalid-data", "Missing timestamp in gen_metadata row", { sessionID: cascadeId }),
+            "invalid-data",
+            cascadeId,
+          ),
+        );
+        return;
+      }
+
+      // Window filter — in-memory containsInstant
+      const inWindow = request.windows.some((w) => containsInstant(w, createdAt!));
+      if (!inWindow) {
+        return;
+      }
+
+      const deduplicationKey = `antigravity:${cascadeId}:${responseId}`;
+
+      // NOTE (project): gen_metadata rows carry no dedicated project field,
+      // so records omit project unless a chat metadata attribute names one.
+      const attributes = antigravitySqliteMetadataAttributes(chatFields);
+      const projectCandidate =
+        attributes.get("project") ??
+        attributes.get("projectId") ??
+        attributes.get("project_id") ??
+        attributes.get("cwd") ??
+        attributes.get("directory");
+      const project =
+        typeof projectCandidate === "string" && projectCandidate.trim().length > 0
+          ? projectCandidate.trim()
+          : undefined;
+
+      try {
+        const record: UsageRecord = createUsageRecord({
+          sessionID: cascadeId,
+          messageID: responseId,
+          createdAt,
+          model,
+          tokens: {
+            input: inputTokens,
+            output: responseTokens,
+            reasoning: thinkingTokens,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          observedAt: new Date(request.capturedAt.getTime()),
+          completeness: "final",
+          provider: "antigravity",
+          tokenRevision: deduplicationKey,
+          ...(project === undefined ? {} : { project }),
+        });
+        reducer.upsert(record);
+        fileHadRows = true;
+      } catch (error) {
+        if (isCancellationError(error)) {
+          throw cancellationError();
+        }
+        fileHadError = true;
+        mutable.errors.push(toCollectionError(error, "invalid-data", cascadeId));
+      }
+    };
+
+    const iterateRows = (handle: InstanceType<typeof DatabaseSync>): void => {
+      const stmt = handle.prepare("SELECT idx, data FROM gen_metadata ORDER BY idx");
+      for (const row of stmt.iterate() as Iterable<{ idx: number; data: unknown }>) {
+        processRow(row);
+      }
+    };
+
     try {
-      const stmt = db.prepare("SELECT idx, data FROM gen_metadata ORDER BY idx");
-      // stmt.all returns rows; for readonly we pass no params
-      rows = stmt.all() as Array<{ idx: number; data: unknown }>;
-      mutable.pagesRead += 1;
+      try {
+        iterateRows(db);
+        mutable.pagesRead += 1;
+      } catch (error) {
+        if (isCancellationError(error)) {
+          throw cancellationError();
+        }
+        if (!isSqliteBusyError(error)) {
+          throw error;
+        }
+        // Busy mid-query: re-open and retry the streaming query once.
+        try {
+          db.close();
+        } catch {
+          // ignore
+        }
+        const retryDb = new DatabaseSync(filePath, { readOnly: true });
+        try {
+          (retryDb as unknown as { exec?: (sql: string) => void }).exec?.("PRAGMA busy_timeout = 1000");
+        } catch {
+          // ignore
+        }
+        try {
+          iterateRows(retryDb);
+          mutable.jobsRetried += 1;
+          mutable.pagesRead += 1;
+        } finally {
+          try {
+            retryDb.close();
+          } catch {
+            // ignore
+          }
+        }
+      }
     } catch (error) {
       if (isCancellationError(error)) {
         try {
@@ -329,180 +509,35 @@ export async function collectAntigravity(request: CollectionRequest): Promise<Co
         }
         throw cancellationError();
       }
-      if (isSqliteBusyError(error)) {
-        mutable.sessionsSkipped += 1;
-        // retry once
-        try {
-          // Re-open and retry query once
-          try {
-            db.close();
-          } catch {
-            // ignore
-          }
-          const retryDb = new DatabaseSync(filePath, { readOnly: true });
-          try {
-            (retryDb as unknown as { exec?: (sql: string) => void }).exec?.("PRAGMA busy_timeout = 1000");
-          } catch {
-            // ignore
-          }
-          const retryStmt = retryDb.prepare("SELECT idx, data FROM gen_metadata ORDER BY idx");
-          rows = retryStmt.all() as Array<{ idx: number; data: unknown }>;
-          mutable.jobsRetried += 1;
-          mutable.pagesRead += 1;
-          try {
-            retryDb.close();
-          } catch {
-            // ignore
-          }
-          // continue to row processing with retry rows
-          db = null; // already closed retryDb, prevent double close
-        } catch (retryError) {
-          if (isCancellationError(retryError)) {
-            throw cancellationError();
-          }
-          mutable.errors.push(toCollectionError(retryError, "unknown", cascadeId));
-          try {
-            db?.close();
-          } catch {
-            // ignore
-          }
-          continue;
-        }
-      } else {
-        mutable.sessionsSkipped += 1;
-        mutable.errors.push(toCollectionError(error, "unknown", cascadeId));
-        try {
-          db?.close();
-        } catch {
-          // ignore
-        }
-        continue;
+      mutable.sessionsSkipped += 1;
+      mutable.errors.push(toCollectionError(error, "unknown", cascadeId));
+      try {
+        db.close();
+      } catch {
+        // ignore
       }
+      continue;
     } finally {
-      // For non-busy-retry path, close after query; for retry success we already handled.
-      // We need to handle both cases: if db still open, close after row processing.
-      // So defer close until after row loop for normal path.
+      try {
+        db.close();
+      } catch {
+        // ignore close errors; if busy, count as skipped
+      }
     }
 
-    // If we retried successfully, rows is already set and db is null (closed). Create a new db handle not needed.
-    // For normal path, db is still open; we will close after processing.
-    const shouldCloseDb = db !== null;
-
-    // Process rows
-    let fileHadRows = false;
-    let fileHadError = false;
-    try {
-      for (const row of rows) {
-        assertNotAborted(request.signal);
-
-        const idx = typeof row.idx === "number" ? row.idx : Number(row.idx);
-        const dataBytes = normalizeDataBytes(row.data);
-        if (dataBytes === null) {
-          continue;
-        }
-
-        const rootFields = parseProtoFields(dataBytes);
-        const chatBytes = protoFieldBytes(firstProtoField(rootFields, 1));
-        const chatFields = parseProtoFields(chatBytes ?? new Uint8Array());
-        const usageBytes = protoFieldBytes(firstProtoField(chatFields, 4));
-        const usageFields = parseProtoFields(usageBytes ?? new Uint8Array());
-
-        if (usageFields.length === 0) {
-          continue;
-        }
-
-        const inputTokens =
-          protoFieldPositiveInteger(firstProtoField(usageFields, 2)) ||
-          protoFieldPositiveInteger(firstProtoField(usageFields, 1));
-        const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3));
-        let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9));
-        let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10));
-
-        // Adjust logic mirrors codeburn buildCallFromSqliteGenMetadataRow:17255
-        if (responseTokens === 0 && thinkingTokens === 0) {
-          responseTokens = totalOutputTokens;
-        } else if (totalOutputTokens > 0 && responseTokens + thinkingTokens !== totalOutputTokens) {
-          const adjustedResponseTokens = totalOutputTokens - thinkingTokens;
-          if (adjustedResponseTokens >= 0) {
-            responseTokens = adjustedResponseTokens;
-          }
-        }
-
-        if (inputTokens === 0 && totalOutputTokens === 0) {
-          continue;
-        }
-
-        const responseId = antigravitySqliteResponseId(usageFields, String(idx));
-        const model = antigravitySqliteModel(chatFields);
-
-        let createdAt: Date | null = null;
-        const timestampIso = antigravitySqliteCreatedAt(chatFields);
-        if (timestampIso) {
-          const parsed = new Date(timestampIso);
-          if (!Number.isNaN(parsed.getTime())) {
-            createdAt = parsed;
-          }
-        }
-        if (createdAt === null && fallbackDate !== undefined && !Number.isNaN(fallbackDate.getTime())) {
-          createdAt = new Date(fallbackDate.getTime());
-        }
-        if (createdAt === null) {
-          // No usable timestamp — skip record but count as error?
-          fileHadError = true;
-          mutable.errors.push(
-            toCollectionError(
-              new DomainError("invalid-data", "Missing timestamp in gen_metadata row", { sessionID: cascadeId }),
-              "invalid-data",
-              cascadeId,
-            ),
-          );
-          continue;
-        }
-
-        // Window filter — in-memory containsInstant
-        const inWindow = request.windows.some((w) => containsInstant(w, createdAt!));
-        if (!inWindow) {
-          continue;
-        }
-
-        const deduplicationKey = `antigravity:${cascadeId}:${responseId}`;
-
-        try {
-          const record: UsageRecord = createUsageRecord({
-            sessionID: cascadeId,
-            messageID: responseId,
-            createdAt,
-            model,
-            tokens: {
-              input: inputTokens,
-              output: responseTokens,
-              reasoning: thinkingTokens,
-              cacheRead: 0,
-              cacheWrite: 0,
-            },
-            observedAt: new Date(request.capturedAt.getTime()),
-            completeness: "final",
-            provider: "antigravity",
-            tokenRevision: deduplicationKey,
-          });
-          reducer.upsert(record);
-          fileHadRows = true;
-        } catch (error) {
-          if (isCancellationError(error)) {
-            throw cancellationError();
-          }
-          fileHadError = true;
-          mutable.errors.push(toCollectionError(error, "invalid-data", cascadeId));
-        }
-      }
-    } finally {
-      if (shouldCloseDb) {
-        try {
-          db!.close();
-        } catch {
-          // ignore close errors; if busy, count as skipped
-        }
-      }
+    if (emptyUsageRows > 0) {
+      fileHadError = true;
+      mutable.errors.push(
+        toCollectionError(
+          new DomainError(
+            "invalid-data",
+            `${emptyUsageRows} gen_metadata row(s) without usage fields in ${cascadeId}`,
+            { sessionID: cascadeId },
+          ),
+          "invalid-data",
+          cascadeId,
+        ),
+      );
     }
 
     if (fileHadRows && !fileHadError) {

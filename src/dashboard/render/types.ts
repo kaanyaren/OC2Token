@@ -6,6 +6,12 @@ import type {
   UsageWindow,
   UsageWindowKind,
 } from "../../domain/index.js";
+import {
+  costForTokens,
+  estimatedCost,
+  estimatedCostForBreakdowns,
+  pricingForModel,
+} from "../../pricing/pricing.js";
 
 export type DateLike = Date | string | number;
 
@@ -36,11 +42,13 @@ export interface BreakdownTotal {
   readonly name: string;
   readonly provider?: string;
   readonly totals: UsageTotals;
+  readonly cost?: number;
 }
 
 export interface DashboardWindow {
   readonly window: UsageWindow;
   readonly totals: UsageTotals;
+  readonly cost?: number;
   readonly trends: ReadonlyArray<TrendBucket>;
   readonly models: ReadonlyArray<BreakdownTotal>;
   readonly providers: ReadonlyArray<BreakdownTotal>;
@@ -100,6 +108,32 @@ type UnknownRecord = Record<string, unknown>;
 const WINDOW_KINDS = ["hour", "day", "week"] as const;
 const COMPONENTS = ["input", "output", "reasoning", "cacheRead", "cacheWrite"] as const;
 
+/**
+ * Lenient-normalization debug counters. normalizeDashboardSnapshot never
+ * throws on corrupt input — it substitutes defaults — but when
+ * OC2TOKEN_DEBUG is set callers (cli) may inspect these to notice data loss.
+ */
+export interface NormalizeDebugCounters {
+  droppedBreakdowns: number;
+  invalidDates: number;
+  invalidCounts: number;
+}
+
+export const normalizeDebugCounters: NormalizeDebugCounters & { reset(): void } = {
+  droppedBreakdowns: 0,
+  invalidDates: 0,
+  invalidCounts: 0,
+  reset() {
+    this.droppedBreakdowns = 0;
+    this.invalidDates = 0;
+    this.invalidCounts = 0;
+  },
+};
+
+export function resetNormalizeDebugCounters(): void {
+  normalizeDebugCounters.reset();
+}
+
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null;
 }
@@ -118,17 +152,30 @@ function asOptionalString(value: unknown): string | undefined {
 
 function asDate(value: unknown): DateLike | null {
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
+    if (Number.isNaN(value.getTime())) {
+      normalizeDebugCounters.invalidDates += 1;
+      return null;
+    }
+    return new Date(value.getTime());
   }
   if (typeof value === "string" || typeof value === "number") {
     const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+    if (Number.isNaN(parsed.getTime())) {
+      normalizeDebugCounters.invalidDates += 1;
+      return null;
+    }
+    return parsed.toISOString();
   }
   return null;
 }
 
 function asCount(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+  // Lenient: corrupt counts become 0 but are counted for debug visibility.
+  if (typeof value === "number" || typeof value === "string") {
+    normalizeDebugCounters.invalidCounts += 1;
+  }
+  return 0;
 }
 
 function tokenInput(value: unknown): UnknownRecord {
@@ -234,12 +281,25 @@ function normalizeBreakdown(value: unknown): ReadonlyArray<BreakdownTotal> {
   for (const item of value) {
     const source = asRecord(item);
     const name = asString(source.name ?? source.model ?? source.provider ?? source.key, "");
-    if (!name) continue;
+    if (!name) {
+      normalizeDebugCounters.droppedBreakdowns += 1;
+      continue;
+    }
     const provider = asOptionalString(source.provider);
+    const totals = totalsFor(source.totals ?? source.usage ?? source);
+    const hasExplicitCost = "cost" in source;
+    let cost: number | undefined;
+    if (hasExplicitCost) {
+      const raw = source.cost;
+      cost = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+    } else {
+      cost = estimatedCost(totals, name);
+    }
     result.push({
       name,
       ...(provider === undefined ? {} : { provider }),
-      totals: totalsFor(source.totals ?? source.usage ?? source),
+      totals,
+      ...(cost === undefined ? {} : { cost }),
     });
   }
   return result.sort((left, right) =>
@@ -380,7 +440,7 @@ function recordsAsBreakdown(
   window?: UsageWindow,
 ): ReadonlyArray<BreakdownTotal> {
   if (!Array.isArray(root.records)) return [];
-  const totals = new Map<string, TokenComponents>();
+  const groups = new Map<string, { totals: UsageTotals; costSum: number; hasUnknown: boolean }>();
   for (const item of root.records) {
     const record = asRecord(item);
     if (record.completeness === "provisional") continue;
@@ -394,14 +454,13 @@ function recordsAsBreakdown(
     const rawName = asOptionalString(record[key]);
     let name: string | undefined;
     if (key === "provider") {
-      // For opencode records the provider field is the generic "opencode" – the
-      // vendor (openai, anthropic …) lives in the model prefix and is what the
-      // Providers breakdown is expected to show in single-source fixtures.
-      if (rawName === "opencode" && model?.includes("/")) {
-        name = model.split("/", 1)[0];
-      } else {
-        name = rawName ?? (model?.includes("/") ? model.split("/", 1)[0] : undefined);
-      }
+      // Unify on raw provider names ("opencode", "codex", "antigravity") to
+      // match Unified totalsByProvider keys. The vendor (openai, anthropic…)
+      // lives in the model prefix ("openai/gpt-5") and is shown in the Models
+      // breakdown — do NOT split "opencode" into its vendor here, otherwise
+      // records-derived Providers ("openai") diverge from raw ("opencode").
+      // Only fall back to the model prefix when the record carries no provider.
+      name = rawName ?? (model?.includes("/") ? model.split("/", 1)[0] : undefined);
     } else if (key === "project") {
       name = rawName;
       // Also accept directory-like values directly
@@ -410,25 +469,47 @@ function recordsAsBreakdown(
       name = rawName;
     }
     if (!name) continue;
-    const current: {
-      input: number;
-      output: number;
-      reasoning: number;
-      cacheRead: number;
-      cacheWrite: number;
-    } = totals.get(name) ?? {
-      input: 0,
-      output: 0,
-      reasoning: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    };
     const next = totalsFor(record);
-    for (const component of COMPONENTS) current[component] += next[component];
-    totals.set(name, current);
+    const existing = groups.get(name);
+    const totals: UsageTotals = existing?.totals
+      ? { ...existing.totals }
+      : {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          recorded_total: 0,
+        };
+    const mutable = totals as unknown as Record<string, number>;
+    for (const component of COMPONENTS) {
+      mutable[component] += next[component];
+    }
+    mutable.recorded_total += next.recorded_total;
+    let costSum = existing?.costSum ?? 0;
+    let hasUnknown = existing?.hasUnknown ?? false;
+    const pricingKey = model ?? name;
+    const pricing = pricingForModel(pricingKey);
+    if (pricing === undefined) {
+      hasUnknown = true;
+    } else {
+      costSum += costForTokens(next, pricing);
+    }
+    groups.set(name, { totals, costSum, hasUnknown });
   }
-  return normalizeBreakdown(
-    [...totals.entries()].map(([name, value]) => ({ name, ...value })),
+  const result: BreakdownTotal[] = [];
+  for (const [name, group] of groups) {
+    const cost = group.hasUnknown ? undefined : Math.round(group.costSum * 1_000_000) / 1_000_000;
+    result.push({
+      name,
+      totals: group.totals,
+      ...(cost === undefined ? {} : { cost }),
+    });
+  }
+  return result.sort((left, right) =>
+    right.totals.recorded_total - left.totals.recorded_total ||
+    left.name.localeCompare(right.name) ||
+    (left.provider ?? "").localeCompare(right.provider ?? ""),
   );
 }
 
@@ -555,9 +636,13 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
     const models = breakdownForWindow(root, "model", kind, window);
     const providers = breakdownForWindow(root, "provider", kind, window);
     const projects = breakdownForWindow(root, "project", kind, window);
+    const totals = readTotals(root, kind, windowData);
+    const rawWindowCost = estimatedCostForBreakdowns(models, true);
+    const windowCost = rawWindowCost;
     windows[kind] = {
       window,
-      totals: readTotals(root, kind, windowData),
+      totals,
+      ...(windowCost === undefined ? {} : { cost: windowCost }),
       trends: Array.isArray(suppliedTrends) ? trends : deriveTrends(root, kind, window),
       models,
       providers,

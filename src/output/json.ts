@@ -10,7 +10,7 @@ import {
   type TrendBucket,
 } from "../dashboard/render/types.js";
 
-export const JSON_SCHEMA_VERSION = 3 as const;
+export const JSON_SCHEMA_VERSION = 4 as const;
 
 export interface SerializedWindow {
   readonly kind: UsageWindowKind;
@@ -52,6 +52,7 @@ export interface SerializedBreakdown {
   readonly name: string;
   readonly provider?: string;
   readonly totals: UsageTotals;
+  readonly cost?: number | null;
 }
 
 export interface StableJSONSnapshot {
@@ -64,6 +65,7 @@ export interface StableJSONSnapshot {
   readonly stale: boolean;
   readonly coverage: StableCoverage;
   readonly totals: Readonly<Record<UsageWindowKind, UsageTotals>>;
+  readonly costs: Readonly<Record<UsageWindowKind, number | null>>;
   readonly trends: Readonly<Record<UsageWindowKind, ReadonlyArray<SerializedTrend>>>;
   readonly models: ReadonlyArray<SerializedBreakdown>;
   readonly providers: ReadonlyArray<SerializedBreakdown>;
@@ -72,6 +74,8 @@ export interface StableJSONSnapshot {
   readonly projectsByWindow: Readonly<Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>>;
   readonly totalsByProvider: Readonly<Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>>;
   readonly totalsByProject: Readonly<Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>>;
+  readonly costsByProvider: Readonly<Record<UsageWindowKind, Readonly<Record<string, number | null>>>>;
+  readonly costsByProject: Readonly<Record<UsageWindowKind, Readonly<Record<string, number | null>>>>;
 }
 
 function dateToISO(value: DateLike | null): string | null {
@@ -137,6 +141,7 @@ function serializeBreakdown(value: BreakdownTotal): SerializedBreakdown {
     name: value.name,
     ...(value.provider === undefined ? {} : { provider: value.provider }),
     totals: value.totals,
+    ...(value.cost === undefined ? {} : { cost: value.cost }),
   };
 }
 
@@ -148,28 +153,38 @@ export function toJSONSnapshot(input: DashboardSnapshotInput): StableJSONSnapsho
   const snapshot = normalizeDashboardSnapshot(input);
   const windows = {} as Record<UsageWindowKind, SerializedWindow>;
   const totals = {} as Record<UsageWindowKind, UsageTotals>;
+  const costs = {} as Record<UsageWindowKind, number | null>;
   const trends = {} as Record<UsageWindowKind, ReadonlyArray<SerializedTrend>>;
   const providersByWindow = {} as Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>;
   const projectsByWindow = {} as Record<UsageWindowKind, ReadonlyArray<SerializedBreakdown>>;
   const totalsByProvider = {} as Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>;
   const totalsByProject = {} as Record<UsageWindowKind, Readonly<Record<string, UsageTotals>>>;
+  const costsByProvider = {} as Record<UsageWindowKind, Readonly<Record<string, number | null>>>;
+  const costsByProject = {} as Record<UsageWindowKind, Readonly<Record<string, number | null>>>;
 
   for (const kind of allWindowKinds()) {
     windows[kind] = serializeWindow(snapshot.windows[kind]);
     totals[kind] = snapshot.windows[kind].totals;
+    costs[kind] = snapshot.windows[kind].cost ?? null;
     trends[kind] = snapshot.windows[kind].trends.map(serializeTrend);
     providersByWindow[kind] = snapshot.windows[kind].providers.map(serializeBreakdown);
     projectsByWindow[kind] = snapshot.windows[kind].projects.map(serializeBreakdown);
     const perProvider: Record<string, UsageTotals> = {};
+    const perProviderCost: Record<string, number | null> = {};
     for (const entry of snapshot.windows[kind].providers) {
       perProvider[entry.name] = entry.totals;
+      perProviderCost[entry.name] = entry.cost ?? null;
     }
     totalsByProvider[kind] = perProvider;
+    costsByProvider[kind] = perProviderCost;
     const perProject: Record<string, UsageTotals> = {};
+    const perProjectCost: Record<string, number | null> = {};
     for (const entry of snapshot.windows[kind].projects) {
       perProject[entry.name] = entry.totals;
+      perProjectCost[entry.name] = entry.cost ?? null;
     }
     totalsByProject[kind] = perProject;
+    costsByProject[kind] = perProjectCost;
   }
 
   return {
@@ -182,6 +197,7 @@ export function toJSONSnapshot(input: DashboardSnapshotInput): StableJSONSnapsho
     stale: snapshot.stale,
     coverage: serializeCoverage(snapshot.coverage),
     totals,
+    costs,
     trends,
     models: snapshot.models.map(serializeBreakdown),
     providers: snapshot.providers.map(serializeBreakdown),
@@ -190,6 +206,8 @@ export function toJSONSnapshot(input: DashboardSnapshotInput): StableJSONSnapsho
     projectsByWindow,
     totalsByProvider,
     totalsByProject,
+    costsByProvider,
+    costsByProject,
   };
 }
 

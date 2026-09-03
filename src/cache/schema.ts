@@ -45,6 +45,14 @@ export interface ManifestDocument extends CacheManifest {
 }
 
 const FORBIDDEN_KEY = /(?:prompt|tool.?input|tool.?output|api.?key|authorization|password|secret|session.?title|session.?name|raw.?content)/i;
+// NOTE (slash contract): SAFE_ID intentionally permits "/" so the cache can
+// persist raw keys such as "session/message" and project paths. The domain
+// layer is stricter: assertRecordID in src/domain/records.ts rejects "/" in
+// sessionID/messageID because "/" joins the stable record key. Scanners must
+// sanitize IDs (replace "/" before createUsageRecord); the cache preserves
+// whatever it is given and domain validation happens at that boundary.
+// recorded_total is always recomputed from the five validated components and
+// a caller-supplied total that disagrees is rejected, never trusted.
 const SAFE_ID = /^[^\u0000-\u001f]{1,512}$/;
 const SAFE_REVISION = /^[a-zA-Z0-9._:-]{1,256}$/;
 
@@ -242,7 +250,11 @@ function safeSnapshotValue(value: unknown, depth = 0): unknown {
     return value;
   }
   if (Array.isArray(value)) {
-    if (value.length > 4096) {
+    // Large histories embed thousands of records in the manifest snapshot.
+    // A 4096 cap turned large *valid* snapshots into cache_unavailable; the
+    // cap is now 1M entries so legitimate histories persist while still
+    // bounding hostile/host-corrupt documents from exhausting memory.
+    if (value.length > 1_000_000) {
       fail("snapshot metadata array is too large");
     }
     return value.map((entry) => safeSnapshotValue(entry, depth + 1));

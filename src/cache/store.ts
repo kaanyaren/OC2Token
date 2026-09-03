@@ -196,6 +196,16 @@ export class NormalizedCacheStore implements SnapshotStore {
     }
   }
 
+  private async previousRecordFile(): Promise<string | undefined> {
+    try {
+      const contents = await this.fs.readFile(this.manifestPath, "utf8");
+      const parsed = migrateManifestDocument(JSON.parse(contents) as unknown);
+      return parsed.value.recordFile;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Remove only OC2Token's own temporary files, never arbitrary cache files. */
   async recoverOrphanTemps(): Promise<OrphanRecoveryResult> {
     return this.recoverOrphanTempsInternal(false);
@@ -344,6 +354,11 @@ export class NormalizedCacheStore implements SnapshotStore {
     try {
       // We hold the lock, so no other process can be writing a temp file.
       await this.recoverOrphanTempsInternal(true);
+      // Snapshots without an explicit generation all report gen 0; the uuid
+      // in nextName keeps their record files unique, and the superseded-file
+      // GC below (not the generation prefix) is what prevents old files from
+      // leaking. Never drop the uuid/counter uniqueness from the filename.
+      const previousRecordFile = await this.previousRecordFile();
       const recordsContents = serializeRecords(records);
       const generation = snapshotGeneration(snapshot);
       const recordFile = `records-${generation}-${this.nextName("record")}.json`;
@@ -363,6 +378,17 @@ export class NormalizedCacheStore implements SnapshotStore {
       };
       const manifestContents = `${JSON.stringify(manifest)}\n`;
       await this.writeUniqueAndRename(manifestContents, this.manifestPath, "manifest");
+
+      // Manifest bump succeeded: the previous records file is superseded and
+      // safe to unlink (readers already resolved the new manifest). Best
+      // effort — a failure here must not fail the commit.
+      if (previousRecordFile !== undefined && previousRecordFile !== recordFile) {
+        try {
+          await this.fs.unlink(join(this.directory, previousRecordFile));
+        } catch (error) {
+          if (!missing(error)) throw error;
+        }
+      }
 
       const normalizedRecords = records.map((record) => toDomainRecord(normalizeRecord(record)));
       return { status: "committed", snapshot, records: normalizedRecords, manifest, recordFile };

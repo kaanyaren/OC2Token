@@ -5,9 +5,11 @@ import {
   type DashboardSnapshotInput,
 } from "../dashboard/render/types.js";
 import {
+  formatCost,
   formatCoverage,
   formatExactTokenCount,
   safeIdentifier,
+  TABLE_ROW_CAP,
 } from "../dashboard/render/format.js";
 
 function tableRow(columns: ReadonlyArray<string>, widths: ReadonlyArray<number>): string {
@@ -15,10 +17,14 @@ function tableRow(columns: ReadonlyArray<string>, widths: ReadonlyArray<number>)
 }
 
 function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): string[] {
+  // Merges match the dashboard: Out = output + reasoning, Cache =
+  // cacheRead + cacheWrite. Raw five-component splits are in stable JSON.
+  // Cap is TABLE_ROW_CAP (20) for piped/log completeness; the interactive
+  // dashboard caps at DASHBOARD_ROW_CAP (12) for TTY height. Intentional.
   const lines = [title];
   if (values.length === 0) return [...lines, "  (none)"];
 
-  const rows = values.slice(0, 20).map((item) => [
+  const rows = values.slice(0, TABLE_ROW_CAP).map((item) => [
     item.provider
       ? `${safeIdentifier(item.provider)}/${safeIdentifier(item.name)}`
       : safeIdentifier(item.name),
@@ -26,6 +32,7 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
     formatExactTokenCount(item.totals.input),
     formatExactTokenCount(item.totals.output + item.totals.reasoning),
     formatExactTokenCount(item.totals.cacheRead + item.totals.cacheWrite),
+    formatCost(item.cost),
   ]);
   const widths = [
     Math.max("Name".length, ...rows.map((row) => row[0].length)),
@@ -33,8 +40,9 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
     Math.max("In".length, ...rows.map((row) => row[2].length)),
     Math.max("Out".length, ...rows.map((row) => row[3].length)),
     Math.max("Cache".length, ...rows.map((row) => row[4].length)),
+    Math.max("Cost".length, ...rows.map((row) => row[5].length)),
   ];
-  lines.push(tableRow(["Name", "Recorded", "In", "Out", "Cache"], widths));
+  lines.push(tableRow(["Name", "Recorded", "In", "Out", "Cache", "Cost"], widths));
   lines.push(tableRow(widths.map((width) => "-".repeat(width)), widths));
   lines.push(...rows.map((row) => tableRow(row, widths)));
   if (values.length > rows.length) lines.push(`  +${values.length - rows.length} more`);
@@ -45,16 +53,18 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
 export function renderTable(input: DashboardSnapshotInput): string {
   const snapshot = normalizeDashboardSnapshot(input);
   const rows: string[][] = [
-    ["Window", "Recorded", "In", "Out", "Cache"],
+    ["Window", "Recorded", "In", "Out", "Cache", "Cost"],
   ];
   for (const kind of allWindowKinds()) {
-    const totals = snapshot.windows[kind].totals;
+    const win = snapshot.windows[kind];
+    const totals = win.totals;
     rows.push([
       kind === "hour" ? "Last hour" : kind === "day" ? "Today" : "This week",
       formatExactTokenCount(totals.recorded_total),
       formatExactTokenCount(totals.input),
       formatExactTokenCount(totals.output + totals.reasoning),
       formatExactTokenCount(totals.cacheRead + totals.cacheWrite),
+      formatCost(win.cost),
     ]);
   }
   const widths = rows[0].map((_, column) =>

@@ -17,6 +17,10 @@ function resolveAntigravityHome(root?: string): string {
   return defaultAntigravityHome();
 }
 
+/** Bounds so a huge $HOME can never hang discovery. */
+const MAX_DATABASE_FILES = 5_000;
+const MAX_ENTRIES_PER_DIR = 10_000;
+
 /**
  * Scan Antigravity SQLite conversation databases.
  *
@@ -32,6 +36,10 @@ function resolveAntigravityHome(root?: string): string {
  * `resolveAntigravityHome` or explicit `root` parameter.
  * For test fixtures `ANTIGRAVITY_HOME` may point directly to a directory
  * containing `*.db` files — that directory is scanned as well.
+ *
+ * Scans are flat (no recursion, fixed known subpaths), symlinks are skipped
+ * via withFileTypes (never followed), and results are capped at
+ * MAX_DATABASE_FILES so huge homes fail bounded instead of hanging.
  */
 export function discoverAntigravityDatabases(root?: string): string[] {
   const base = resolveAntigravityHome(root);
@@ -39,13 +47,21 @@ export function discoverAntigravityDatabases(root?: string): string[] {
   const result: string[] = [];
 
   const tryDir = (dir: string): void => {
-    let entries: string[];
+    if (result.length >= MAX_DATABASE_FILES) return;
+    let entries;
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
-    for (const file of entries) {
+    let scanned = 0;
+    for (const entry of entries) {
+      if (result.length >= MAX_DATABASE_FILES) return;
+      if (scanned >= MAX_ENTRIES_PER_DIR) break;
+      scanned += 1;
+      // Never follow symlinks; only regular files can be databases.
+      if (entry.isSymbolicLink() || !entry.isFile()) continue;
+      const file = entry.name;
       // Only *.db — ignore -shm/-wal sidecars and .pb files
       if (!file.toLowerCase().endsWith(".db")) {
         continue;
@@ -88,9 +104,11 @@ export function discoverAntigravityDatabases(root?: string): string[] {
   ];
 
   for (const rel of relativeFromHomedir) {
+    if (result.length >= MAX_DATABASE_FILES) break;
     tryDir(join(base, rel));
   }
   for (const rel of relativeFromGemini) {
+    if (result.length >= MAX_DATABASE_FILES) break;
     tryDir(join(base, rel));
   }
 

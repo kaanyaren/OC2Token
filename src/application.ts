@@ -25,6 +25,7 @@ import {
   type UsageRecord,
   type UsageTrendBucket,
   type UsageTrendsByWindow,
+  type UsageWindow,
   type UsageWindowKind,
   toUsageTotals,
 } from "./domain/index.js";
@@ -45,8 +46,9 @@ import {
 
 /** The default is intentionally explicit so a second CLI instance is safe. */
 export function defaultCacheDirectory(): string {
-  const root = process.env.XDG_CACHE_HOME ?? join(homedir(), "Library", "Caches");
-  return join(root, "oc2token");
+  if (process.env.XDG_CACHE_HOME) return join(process.env.XDG_CACHE_HOME, "oc2token");
+  if (process.platform === "darwin") return join(homedir(), "Library", "Caches", "oc2token");
+  return join(homedir(), ".cache", "oc2token");
 }
 
 function appendError(coverage: Coverage, error: CollectionError): Coverage {
@@ -85,6 +87,63 @@ function addUsageTotals(left: UsageTotals, right: UsageTotals): UsageTotals {
 
 function emptyUsageTotals(): UsageTotals {
   return toUsageTotals({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+}
+
+function sortBreakdowns(values: Array<UsageBreakdown>): Array<UsageBreakdown> {
+  values.sort(
+    (left, right) => right.totals.recorded_total - left.totals.recorded_total || left.name.localeCompare(right.name),
+  );
+  return values;
+}
+
+/**
+ * Single source of truth for provider/model/project splits: recompute from the
+ * merged, deduplicated records in one window. Supplied per-source breakdowns
+ * describe the same records, so merging both would double-count; callers use
+ * this result when non-empty and fall back to merged supplied breakdowns only
+ * when a window has no records (e.g. a stats source with zero records but
+ * usable totals). Empty input yields empty outputs, preserving empty-source
+ * behavior.
+ */
+function buildBreakdowns(
+  records: ReadonlyArray<UsageRecord>,
+  window: UsageWindow,
+): { providers: Array<UsageBreakdown>; models: Array<UsageBreakdown>; projects: Array<UsageBreakdown> } {
+  const windowRecords = records.filter((record) => containsInstant(window, record.createdAt));
+  if (windowRecords.length === 0) return { providers: [], models: [], projects: [] };
+  const byProvider = new Map<ProviderKind, UsageRecord[]>();
+  const byModel = new Map<string, UsageRecord[]>();
+  const byProject = new Map<string, UsageRecord[]>();
+  for (const record of windowRecords) {
+    const providerRecords = byProvider.get(record.provider);
+    if (providerRecords === undefined) byProvider.set(record.provider, [record]);
+    else providerRecords.push(record);
+    const modelRecords = byModel.get(record.model);
+    if (modelRecords === undefined) byModel.set(record.model, [record]);
+    else modelRecords.push(record);
+    if (record.project !== undefined && record.project.trim().length > 0) {
+      const projectRecords = byProject.get(record.project);
+      if (projectRecords === undefined) byProject.set(record.project, [record]);
+      else projectRecords.push(record);
+    }
+  }
+  const providers: Array<UsageBreakdown> = [];
+  for (const [name, recs] of byProvider.entries()) {
+    providers.push({ name, provider: name, totals: sumUsageRecords(recs, window) });
+  }
+  const models: Array<UsageBreakdown> = [];
+  for (const [name, recs] of byModel.entries()) {
+    models.push({ name, totals: sumUsageRecords(recs, window) });
+  }
+  const projects: Array<UsageBreakdown> = [];
+  for (const [name, recs] of byProject.entries()) {
+    projects.push({ name, totals: sumUsageRecords(recs, window) });
+  }
+  return {
+    providers: sortBreakdowns(providers),
+    models: sortBreakdowns(models),
+    projects: sortBreakdowns(projects),
+  };
 }
 
 function mergeBreakdowns(values: ReadonlyArray<UsageBreakdown>): ReadonlyArray<UsageBreakdown> {
@@ -219,9 +278,11 @@ export class HybridUsageSource implements UsageSource {
           continue;
         }
         if (!isStatsRangeMismatch(error)) throw error;
-        // Cache this decision for the current server fingerprint. A version or
-        // PID change causes the next refresh to probe the new implementation.
-        this.statsUnsupportedFingerprint = fingerprint ?? "unknown";
+        // Cache this decision for the live server fingerprint. A reconnect
+        // above replaces the connection, so the stale entry-time fingerprint
+        // must not be reused: re-read the current connection instead.
+        this.statsUnsupportedFingerprint = this.adapter.currentConnection?.health.fingerprint ??
+          fingerprint ?? "unknown";
         return this.fallback(request);
       }
     }
@@ -442,87 +503,28 @@ export class UnifiedUsageSource implements UsageSource {
     const projectsMutable: Record<string, ReadonlyArray<UsageBreakdown>> = {};
 
     for (const w of request.windows) {
-      const windowRecords = records.filter((r) => containsInstant(w, r.createdAt));
-      if (windowRecords.length > 0) {
-        const byProvider = new Map<ProviderKind, UsageRecord[]>();
-        const byModel = new Map<string, UsageRecord[]>();
-        const byProject = new Map<string, UsageRecord[]>();
-        for (const r of windowRecords) {
-          const prov = r.provider;
-          const arrP = byProvider.get(prov);
-          if (arrP === undefined) byProvider.set(prov, [r]);
-          else arrP.push(r);
-
-          const modelName = r.model;
-          const arrM = byModel.get(modelName);
-          if (arrM === undefined) byModel.set(modelName, [r]);
-          else arrM.push(r);
-
-          if (r.project !== undefined && r.project.trim().length > 0) {
-            const proj = r.project;
-            const arrJ = byProject.get(proj);
-            if (arrJ === undefined) byProject.set(proj, [r]);
-            else arrJ.push(r);
-          }
-        }
-
-        if (byProvider.size > 0) {
-          const breakdowns: UsageBreakdown[] = [];
-          for (const [provName, recs] of byProvider.entries()) {
-            const totals = sumUsageRecords(recs, w);
-            breakdowns.push({ name: provName, provider: provName, totals });
-          }
-          breakdowns.sort(
-            (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
-          );
-          providersMutable[w.kind] = breakdowns;
-        }
-
-        if (byModel.size > 0) {
-          const breakdowns: UsageBreakdown[] = [];
-          for (const [modelName, recs] of byModel.entries()) {
-            const totals = sumUsageRecords(recs, w);
-            breakdowns.push({ name: modelName, totals });
-          }
-          breakdowns.sort(
-            (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
-          );
-          modelsMutable[w.kind] = breakdowns;
-        }
-
-        if (byProject.size > 0) {
-          const breakdowns: UsageBreakdown[] = [];
-          for (const [projName, recs] of byProject.entries()) {
-            const totals = sumUsageRecords(recs, w);
-            breakdowns.push({ name: projName, totals });
-          }
-          breakdowns.sort(
-            (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
-          );
-          projectsMutable[w.kind] = breakdowns;
-        }
-      }
-
+      // Single-source breakdowns: recomputed splits describe the same records
+      // as the supplied per-source splits, so using both would double-count.
+      // Prefer the recomputed split; fall back to merged supplied splits only
+      // when the window has no records (e.g. stats totals without records).
+      const recomputed = buildBreakdowns(records, w);
       const suppliedProviders = successful.flatMap(({ result }) => result.providersByWindow?.[w.kind] ?? []);
-      if (suppliedProviders.length > 0) {
-        providersMutable[w.kind] = mergeBreakdowns([
-          ...(providersMutable[w.kind] ?? []),
-          ...suppliedProviders,
-        ]);
+      if (recomputed.providers.length > 0) {
+        providersMutable[w.kind] = recomputed.providers;
+      } else if (suppliedProviders.length > 0) {
+        providersMutable[w.kind] = mergeBreakdowns(suppliedProviders);
       }
       const suppliedModels = successful.flatMap(({ result }) => result.modelsByWindow?.[w.kind] ?? []);
-      if (suppliedModels.length > 0) {
-        modelsMutable[w.kind] = mergeBreakdowns([
-          ...(modelsMutable[w.kind] ?? []),
-          ...suppliedModels,
-        ]);
+      if (recomputed.models.length > 0) {
+        modelsMutable[w.kind] = recomputed.models;
+      } else if (suppliedModels.length > 0) {
+        modelsMutable[w.kind] = mergeBreakdowns(suppliedModels);
       }
       const suppliedProjects = successful.flatMap(({ result }) => result.projectsByWindow?.[w.kind] ?? []);
-      if (suppliedProjects.length > 0) {
-        projectsMutable[w.kind] = mergeBreakdowns([
-          ...(projectsMutable[w.kind] ?? []),
-          ...suppliedProjects,
-        ]);
+      if (recomputed.projects.length > 0) {
+        projectsMutable[w.kind] = recomputed.projects;
+      } else if (suppliedProjects.length > 0) {
+        projectsMutable[w.kind] = mergeBreakdowns(suppliedProjects);
       }
     }
 

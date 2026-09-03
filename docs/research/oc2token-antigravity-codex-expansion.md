@@ -267,3 +267,22 @@ git worktree add ../OC2Token-t2-proto -b feat/t2-antigravity-proto
 ```
 and dispatches parallel subagents per topology above. Say "launch T0" to start.
 
+---
+
+## Maintenance note (2026-09-03) — `@opencode-ai/client` beta churn
+
+Same warning as in `opencode2-token-counter.md`: `@opencode-ai/client@beta`
+can change its generated API, session/message pagination shapes, or
+`Service.discover`/`ensure` behavior at any time. The Codex (JSONL) and
+Antigravity (SQLite protobuf field numbers) parsers pinned from
+`codeburn 0.9.23` have the same drift risk on the other side. When touching
+any provider adapter or bumping the client:
+
+1. Add or update a **contract test** with a captured fixture (one stats
+   response, one message page, one rollout `token_count` line, one
+   `gen_metadata` blob) before changing parser code.
+2. Re-run the full suite (`npm test`) plus `oc2token doctor --json` against
+   live sources if available.
+3. Record the verified upstream version (client beta tag, `codex --version`,
+   Antigravity build) in the PR description.
+

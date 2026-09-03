@@ -1,17 +1,30 @@
 {
+  // Strictness notes (evaluated 2026-09-03):
+  // - `strict` stays on.
+  // - `noUncheckedIndexedAccess` left OFF: enabling surfaces ~40+ errors across
+  //   src (collector/table/dashboard indexing) + test. Needs a dedicated
+  //   cleanup pass over code this agent does not own — do not flip silently.
+  // - `noUnusedLocals` / `noUnusedParameters` left OFF for the same reason:
+  //   ~25 existing sites in src (scanner fallbacks, pricing stubs, render
+  //   helpers). Fix those sites first, then enable.
+  // - `DOM` lib removed: the only DOM-ish global used is `DOMException`
+  //   (src/opencode/transport.ts), which @types/node already declares via
+  //   web-globals/domexception.d.ts. `node:sqlite` typing needs no DOM lib.
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "noEmitOnError": true,
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

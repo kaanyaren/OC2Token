@@ -1,27 +1,52 @@
 {
   "name": "oc2token",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A macOS-first OpenCode 2 token usage dashboard CLI",
   "type": "module",
   "bin": {
     "oc2token": "dist/src/cli.js"
   },
-  "files": ["dist/src", "README.md", "LICENSE"],
-  "engines": {"node": ">=20"},
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "//engines": "node:sqlite (DatabaseSync) needs >=22.5; @types/node is ^22, so >=22.12 keeps runtime and types in sync",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test $(find dist/test -name '*.test.js' -print)",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
+    "test:watch": "npm run build && node --test --watch \"dist/test/**/*.test.js\"",
+    "clean": "rm -rf dist coverage *.tgz",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "screenshots": "npm run build && node scripts/generate-screenshots.mjs",
     "pack:check": "npm run build && npm pack --dry-run"
   },
-  "keywords": ["opencode", "tokens", "terminal", "tui"],
+  "keywords": [
+    "opencode",
+    "tokens",
+    "terminal",
+    "tui"
+  ],
   "license": "MIT",
-  "publishConfig": {"access": "public"},
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@opencode-ai/client": "0.0.0-beta-18866"
   },
   "devDependencies": {
+    "@eslint/js": "^9.17.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.18.0"
   }
 }

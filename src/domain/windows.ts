@@ -91,18 +91,50 @@ function utcDateTime(value: CivilDateTime): Date {
   return result;
 }
 
+// Cached formatters: partsFor/instantAtLocal can run hundreds of times per
+// refresh (offset sampling calls partsFor ~25x per instantAtLocal, plus one
+// per candidate). Constructing Intl.DateTimeFormat each time dominates the
+// profile, so instances are cached per time zone. The cache is bounded in
+// practice by the distinct time zones in a single process (normally one).
+const partsFormatterCache = new Map<string, Intl.DateTimeFormat>();
+const labelFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function partsFormatter(timezone: string): Intl.DateTimeFormat {
+  let formatter = partsFormatterCache.get(timezone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat("en-US-u-ca-gregory-hc-h23", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    partsFormatterCache.set(timezone, formatter);
+  }
+  return formatter;
+}
+
+function trendLabelFormatter(timezone: string, kind: UsageWindowKind): Intl.DateTimeFormat {
+  const key = `${timezone}\0${kind}`;
+  let formatter = labelFormatterCache.get(key);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat(
+      "en-CA",
+      kind === "week"
+        ? { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }
+        : { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
+    );
+    labelFormatterCache.set(key, formatter);
+  }
+  return formatter;
+}
+
 function partsFor(instant: Date, timezone: string): CivilDateTime {
   assertValidInstant(instant, "instant");
-  const formatter = new Intl.DateTimeFormat("en-US-u-ca-gregory-hc-h23", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
+  const formatter = partsFormatter(timezone);
   const parts = new Map(
     formatter
       .formatToParts(instant)
@@ -328,12 +360,7 @@ export function createUsageWindows(
 
 function trendBucketLabel(instant: Date, timezone: string, kind: UsageWindowKind): string {
   try {
-    return new Intl.DateTimeFormat(
-      "en-CA",
-      kind === "week"
-        ? { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }
-        : { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
-    ).format(instant);
+    return trendLabelFormatter(timezone, kind).format(instant);
   } catch {
     return instant.toISOString();
   }

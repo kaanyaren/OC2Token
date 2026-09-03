@@ -156,13 +156,27 @@ export function validateTokenComponents(value: unknown): TokenValidationResult {
   }
 }
 
+/**
+ * Strict type guard for already-normalized values.
+ *
+ * This is intentionally stricter than {@link parseTokenComponents}, which is
+ * the lenient ingestion path: parse accepts a present object with omitted
+ * fields (omitted means zero) and accepts either the nested `cache.read/write`
+ * shape or the flattened `cacheRead/cacheWrite` shape. `isTokenComponents`
+ * instead requires all five flattened fields to already be present as
+ * non-negative safe integers. Extra fields (including a nested `cache` object)
+ * are ignored: a normalized value stays normalized even if the raw payload
+ * retained provider-specific extras.
+ */
 export function isTokenComponents(value: unknown): value is TokenComponents {
-  const result = validateTokenComponents(value);
-  if (!result.ok) {
-    return false;
+  if (!isRecord(value)) return false;
+  for (const name of TOKEN_COMPONENT_NAMES) {
+    const candidate = value[name];
+    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
+      return false;
+    }
   }
-
-  return TOKEN_COMPONENT_NAMES.every((name) => name in (value as Record<string, unknown>));
+  return true;
 }
 
 /** Calculate the explicitly named accounting sum; this is not a billing total. */

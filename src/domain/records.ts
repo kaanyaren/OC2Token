@@ -124,6 +124,11 @@ export function tokenRevisionFor(
  * of the key. Cross-provider collisions are impossible in practice because
  * each provider prefixes distinct session/message IDs (e.g. Codex rollout
  * path vs Antigravity cascadeId).
+ *
+ * IDs containing `/` are rejected (rather than escaped) so the key stays
+ * unambiguously splittable on the single delimiter. Callers that normalize
+ * external IDs must surface the rejection as an `invalid-data` coverage error
+ * for that item, not as a fatal collection failure.
  */
 export function usageRecordKey(sessionID: string, messageID: string): string {
   assertRecordID(sessionID, "sessionID");
@@ -185,7 +190,16 @@ type MutableTokenComponents = {
   -readonly [Name in keyof TokenComponents]: TokenComponents[Name];
 };
 
-/** Sum canonical records in a half-open window without mutating the records. */
+/**
+ * Sum canonical records in a half-open window without mutating the records.
+ *
+ * Overflow throws `DomainError("invalid-token-components")` instead of
+ * silently wrapping. Summing is a pure domain helper, so it cannot produce
+ * partial coverage itself: callers that aggregate untrusted remote data
+ * (unified/collector trend and breakdown builders) must catch the overflow
+ * and surface it as an `invalid-data` coverage error with
+ * `complete === false` while keeping the records collected so far.
+ */
 export function sumUsageRecords(
   records: ReadonlyArray<UsageRecord>,
   window: UsageWindow,

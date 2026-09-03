@@ -1,0 +1,25 @@
+# CI: build + typecheck + test on supported Node majors.
+# Matrix is 22.x / 24.x (NOT 20.x): engines require >=22.12 because
+# node:sqlite (DatabaseSync) needs >=22.5 and @types/node is ^22.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["22.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test

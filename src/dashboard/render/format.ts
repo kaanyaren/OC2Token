@@ -174,6 +174,17 @@ export function formatCost(value: number | undefined | null): string {
   return `$${value.toFixed(2)}`;
 }
 
+export function formatStatusFooter(coverage: CoverageView, stale: boolean): string {
+  // Single canonical status line. formatCoverage already prefixes STATE
+  // ("COMPLETE · 1/1 sessions"), so callers must not prepend another
+  // `Status: X · Coverage: X` duplication — use `Status: ${line}` once.
+  return `Status: ${formatCoverage(coverage, stale)}`;
+}
+
+/** Row caps are intentionally different and documented where used. */
+export const TABLE_ROW_CAP = 20;
+export const DASHBOARD_ROW_CAP = 12;
+
 export function formatCostCompact(value: number | undefined | null): string {
   // Alias for table/dashboard where width matters — same as formatCost but without extra locale commas for <1k
   return formatCost(value);

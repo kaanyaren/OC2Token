@@ -2,3 +2,9 @@ node_modules/
 dist/
 *.tgz
 .DS_Store
+.env
+*.log
+coverage/
+*.db-shm
+*.db-wal
+.oc2token-*.tmp

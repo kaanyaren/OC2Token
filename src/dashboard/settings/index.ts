@@ -113,11 +113,28 @@ export function settingsFilePath(cacheDirectory?: string): string {
 
 export async function loadDashboardSettings(cacheDirectory?: string): Promise<DashboardSettings | undefined> {
   const path = settingsFilePath(cacheDirectory);
+  let contents: string;
   try {
-    const contents = await fs.readFile(path, "utf8");
+    contents = await fs.readFile(path, "utf8");
+  } catch (error) {
+    // Missing file is normal on first run — silent. Other read errors warn.
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      process.stderr.write(`oc2token: warning: failed to read settings at ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    return undefined;
+  }
+  try {
     const parsed = JSON.parse(contents) as unknown;
     return normalizeSettings(parsed);
-  } catch {
+  } catch (error) {
+    // Preserve corrupt settings for inspection instead of silently discarding.
+    try {
+      const backup = `${path}.corrupt-${Date.now()}`;
+      await fs.writeFile(backup, contents, "utf8");
+      process.stderr.write(`oc2token: warning: corrupt settings at ${path} backed up to ${backup}: ${error instanceof Error ? error.message : String(error)}\n`);
+    } catch {
+      process.stderr.write(`oc2token: warning: corrupt settings at ${path} could not be backed up: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
     return undefined;
   }
 }
@@ -127,7 +144,11 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
   const directory = cacheDirectory ?? defaultCacheDirectory();
   try {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  } catch {}
+  } catch (error) {
+    // Do not silently lie about persistence — warn; the dashboard keeps running with in-memory values.
+    process.stderr.write(`oc2token: warning: failed to create settings directory at ${directory}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return;
+  }
   const payload = JSON.stringify(
     {
       version: 1,
@@ -139,7 +160,9 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
   );
   try {
     await fs.writeFile(path, `${payload}\n`, "utf8");
-  } catch {}
+  } catch (error) {
+    process.stderr.write(`oc2token: warning: failed to save settings at ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
 }
 
 export const REFRESH_INTERVAL_PRESETS: readonly number[] = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400] as const;

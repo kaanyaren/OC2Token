@@ -137,10 +137,13 @@ export class CacheLock {
       const parsed: unknown = JSON.parse(contents);
       return validOwner(parsed) ? parsed : undefined;
     } catch (error) {
+      // Only a missing owner file (or corrupt JSON) means "no owner".
+      // Permission errors (EACCES/EPERM) and other I/O failures must surface
+      // so callers do not mistake "cannot read" for "unlocked".
       if (isMissing(error) || error instanceof SyntaxError) {
         return undefined;
       }
-      return undefined;
+      throw error;
     }
   }
 

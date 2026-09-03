@@ -852,3 +852,17 @@ conflicts to resolve opportunistically.
    dependency-light ANSI renderer.
 3. Use the unscoped npm name `oc2token` or reserve a scoped package name for
    the project.
+
+## Maintenance note (2026-09-03) — `@opencode-ai/client` beta churn
+
+`@opencode-ai/client` is still a **beta** contract (`beta-18866` at research
+time). Upstream may rename endpoints, change `TokenUsage` shapes, or alter
+`Service.discover`/`ensure` semantics without a major bump. When bumping the
+client dependency:
+
+1. Run the opencode-adapter contract tests plus a live `oc2token doctor`
+   against a running OpenCode 2 service before merging.
+2. Re-verify the stats range probe (`from`/`to` honored vs ignored) — a
+   silent upstream fix or regression there flips every window total.
+3. Keep all transport code in `src/opencode/` so the blast radius stays
+   contained.

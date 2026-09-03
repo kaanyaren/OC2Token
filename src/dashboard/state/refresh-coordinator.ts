@@ -237,6 +237,13 @@ export class RefreshCoordinator<
   /**
    * Stop scheduling, invalidate the current generation, abort network work,
    * and wait only briefly for sources which honor cancellation.
+   *
+   * cleanupTimeoutMilliseconds (default 250ms) bounds quit latency: sources
+   * honoring AbortSignal settle promptly, while sync scans that ignore the
+   * signal keep running orphaned in the background. Their late results are
+   * discarded via the generation guard, but their CPU/IO is not reclaimed —
+   * this is intentional to keep quit responsive; use a larger timeout if
+   * clean scan shutdown matters more than fast exit.
    */
   async quit(): Promise<void> {
     if (this.quitting) {
@@ -380,7 +387,30 @@ export class RefreshCoordinator<
         };
         this.emit();
 
+        // A slow initial must not cause an immediate second refresh: the
+        // scheduler was armed at start(), so restart the cadence from
+        // completion. Timer-only pending fired during the initial is already
+        // satisfied by the fresh result and is dropped below.
+        if (reason === "initial" && !this.quitting) {
+          try {
+            this.scheduler.reset();
+          } catch {
+            // Reset is best-effort; a failed reset leaves the old deadline.
+          }
+        }
+
         if (!this.quitting && this.pendingReason !== undefined) {
+          if (reason === "initial" && this.pendingReason === "timer") {
+            const waiters = this.pendingWaiters;
+            this.pendingReason = undefined;
+            this.pendingWaiters = [];
+            this.state = { ...this.state, pendingReason: undefined };
+            this.emit();
+            for (const waiter of waiters) {
+              waiter.resolve({ kind: "discarded", generation, reason: "timer" });
+            }
+            return;
+          }
           const pendingReason = this.pendingReason;
           const waiters = this.pendingWaiters;
           this.pendingReason = undefined;

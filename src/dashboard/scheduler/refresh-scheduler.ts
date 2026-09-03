@@ -11,7 +11,8 @@ export interface TimerDriver {
 const systemTimers: TimerDriver = {
   setTimeout(callback, delayMilliseconds) {
     const handle = setTimeout(callback, delayMilliseconds);
-    // Do not keep a non-interactive process alive solely for a dashboard timer.
+    // Exemplary: never keep a non-interactive process alive solely for a
+    // dashboard timer. Keep unref — removing it would hang `--once`/tests.
     if (typeof handle === "object" && handle !== null && "unref" in handle) {
       (handle as { unref(): void }).unref();
     }

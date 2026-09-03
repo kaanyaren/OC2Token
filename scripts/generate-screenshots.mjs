@@ -1,5 +1,9 @@
 #!/usr/bin/env node
+// Run via `npm run screenshots` (builds first). Fixture-only: renders SVGs
+// from synthetic records under a temp dir — never reads real user data and
+// never bakes real homedir paths into committed assets.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +12,13 @@ import { renderDashboard, renderTable } from "../dist/src/output/index.js";
 
 const OUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets/screenshots");
 fs.mkdirSync(OUT_DIR, { recursive: true });
+
+// Fixture project roots under a temp dir — committed SVGs must not leak a
+// real username/homedir, and the generator must not depend on real checkouts.
+const FIXTURE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "oc2token-shots-"));
+const FIXTURE_PROJECT_A = path.join(FIXTURE_ROOT, "OC2Token");
+const FIXTURE_PROJECT_B = path.join(FIXTURE_ROOT, "opencode");
+const FIXTURE_PROJECT_C = path.join(FIXTURE_ROOT, "client-app");
 
 const NOW = new Date("2026-09-02T10:00:00.000Z");
 const TZ = "Europe/Istanbul";
@@ -33,24 +44,24 @@ function makeUnifiedFixture() {
 
   const records = [
     // hour window: last 60 minutes (09:00-10:00 UTC = 12:00-13:00 Istanbul)
-    rec({ provider: "opencode", model: "openai/gpt-5", project: "/Users/kaanyaren/GitHub/OC2Token", input: 4200, output: 1100, reasoning: 340, cacheRead: 800, cacheWrite: 120, createdAt: new Date("2026-09-02T09:55:00.000Z") }),
-    rec({ provider: "opencode", model: "anthropic/claude-4-sonnet", project: "/Users/kaanyaren/GitHub/opencode", input: 3100, output: 900, reasoning: 210, cacheRead: 0, cacheWrite: 0, createdAt: new Date("2026-09-02T09:48:00.000Z") }),
-    rec({ provider: "codex", model: "openai/gpt-5-codex", project: "/Users/kaanyaren/GitHub/OC2Token", input: 1800, output: 420, reasoning: 88, cacheRead: 150, cacheWrite: 30, createdAt: new Date("2026-09-02T09:42:00.000Z") }),
-    rec({ provider: "antigravity", model: "google/gemini-3-pro", project: "/Users/kaanyaren/work/client-app", input: 940, output: 210, reasoning: 44, cacheRead: 320, cacheWrite: 80, createdAt: new Date("2026-09-02T09:30:00.000Z") }),
-    rec({ provider: "opencode", model: "openai/gpt-5-mini", project: "/Users/kaanyaren/GitHub/OC2Token", input: 520, output: 140, reasoning: 0, cacheRead: 60, cacheWrite: 10, createdAt: new Date("2026-09-02T09:15:00.000Z") }),
+    rec({ provider: "opencode", model: "openai/gpt-5", project: FIXTURE_PROJECT_A, input: 4200, output: 1100, reasoning: 340, cacheRead: 800, cacheWrite: 120, createdAt: new Date("2026-09-02T09:55:00.000Z") }),
+    rec({ provider: "opencode", model: "anthropic/claude-4-sonnet", project: FIXTURE_PROJECT_B, input: 3100, output: 900, reasoning: 210, cacheRead: 0, cacheWrite: 0, createdAt: new Date("2026-09-02T09:48:00.000Z") }),
+    rec({ provider: "codex", model: "openai/gpt-5-codex", project: FIXTURE_PROJECT_A, input: 1800, output: 420, reasoning: 88, cacheRead: 150, cacheWrite: 30, createdAt: new Date("2026-09-02T09:42:00.000Z") }),
+    rec({ provider: "antigravity", model: "google/gemini-3-pro", project: FIXTURE_PROJECT_C, input: 940, output: 210, reasoning: 44, cacheRead: 320, cacheWrite: 80, createdAt: new Date("2026-09-02T09:30:00.000Z") }),
+    rec({ provider: "opencode", model: "openai/gpt-5-mini", project: FIXTURE_PROJECT_A, input: 520, output: 140, reasoning: 0, cacheRead: 60, cacheWrite: 10, createdAt: new Date("2026-09-02T09:15:00.000Z") }),
 
     // day window earlier today (00:00 Istanbul = 21:00 UTC previous day)
-    rec({ provider: "opencode", model: "openai/gpt-5", project: "/Users/kaanyaren/GitHub/OC2Token", input: 8200, output: 2100, reasoning: 510, cacheRead: 1200, cacheWrite: 200, createdAt: new Date("2026-09-02T06:30:00.000Z") }),
-    rec({ provider: "opencode", model: "anthropic/claude-4-sonnet", project: "/Users/kaanyaren/GitHub/opencode", input: 5400, output: 1600, reasoning: 380, cacheRead: 600, cacheWrite: 90, createdAt: new Date("2026-09-02T05:10:00.000Z") }),
-    rec({ provider: "codex", model: "openai/gpt-5-codex", project: "/Users/kaanyaren/GitHub/OC2Token", input: 3200, output: 780, reasoning: 120, cacheRead: 280, cacheWrite: 40, createdAt: new Date("2026-09-02T04:00:00.000Z") }),
-    rec({ provider: "antigravity", model: "google/gemini-3-flash", project: "/Users/kaanyaren/work/client-app", input: 2100, output: 540, reasoning: 65, cacheRead: 410, cacheWrite: 70, createdAt: new Date("2026-09-02T02:30:00.000Z") }),
-    rec({ provider: "opencode", model: "openai/gpt-4o", project: "/Users/kaanyaren/GitHub/OC2Token", input: 1600, output: 420, reasoning: 30, cacheRead: 220, cacheWrite: 15, createdAt: new Date("2026-09-01T22:15:00.000Z") }),
+    rec({ provider: "opencode", model: "openai/gpt-5", project: FIXTURE_PROJECT_A, input: 8200, output: 2100, reasoning: 510, cacheRead: 1200, cacheWrite: 200, createdAt: new Date("2026-09-02T06:30:00.000Z") }),
+    rec({ provider: "opencode", model: "anthropic/claude-4-sonnet", project: FIXTURE_PROJECT_B, input: 5400, output: 1600, reasoning: 380, cacheRead: 600, cacheWrite: 90, createdAt: new Date("2026-09-02T05:10:00.000Z") }),
+    rec({ provider: "codex", model: "openai/gpt-5-codex", project: FIXTURE_PROJECT_A, input: 3200, output: 780, reasoning: 120, cacheRead: 280, cacheWrite: 40, createdAt: new Date("2026-09-02T04:00:00.000Z") }),
+    rec({ provider: "antigravity", model: "google/gemini-3-flash", project: FIXTURE_PROJECT_C, input: 2100, output: 540, reasoning: 65, cacheRead: 410, cacheWrite: 70, createdAt: new Date("2026-09-02T02:30:00.000Z") }),
+    rec({ provider: "opencode", model: "openai/gpt-4o", project: FIXTURE_PROJECT_A, input: 1600, output: 420, reasoning: 30, cacheRead: 220, cacheWrite: 15, createdAt: new Date("2026-09-01T22:15:00.000Z") }),
 
     // week window earlier this week
-    rec({ provider: "opencode", model: "anthropic/claude-4-opus", project: "/Users/kaanyaren/GitHub/opencode", input: 12400, output: 3100, reasoning: 820, cacheRead: 1800, cacheWrite: 300, createdAt: new Date("2026-09-01T10:00:00.000Z") }),
-    rec({ provider: "codex", model: "openai/gpt-5-codex", project: "/Users/kaanyaren/GitHub/OC2Token", input: 8800, output: 2100, reasoning: 410, cacheRead: 900, cacheWrite: 160, createdAt: new Date("2026-08-31T14:00:00.000Z") }),
-    rec({ provider: "antigravity", model: "google/gemini-3-pro", project: "/Users/kaanyaren/work/client-app", input: 5600, output: 1400, reasoning: 260, cacheRead: 740, cacheWrite: 120, createdAt: new Date("2026-08-30T09:00:00.000Z") }),
-    rec({ provider: "opencode", model: "openai/gpt-5", project: "/Users/kaanyaren/GitHub/OC2Token", input: 4300, output: 1100, reasoning: 190, cacheRead: 540, cacheWrite: 80, createdAt: new Date("2026-08-29T16:00:00.000Z") }),
+    rec({ provider: "opencode", model: "anthropic/claude-4-opus", project: FIXTURE_PROJECT_B, input: 12400, output: 3100, reasoning: 820, cacheRead: 1800, cacheWrite: 300, createdAt: new Date("2026-09-01T10:00:00.000Z") }),
+    rec({ provider: "codex", model: "openai/gpt-5-codex", project: FIXTURE_PROJECT_A, input: 8800, output: 2100, reasoning: 410, cacheRead: 900, cacheWrite: 160, createdAt: new Date("2026-08-31T14:00:00.000Z") }),
+    rec({ provider: "antigravity", model: "google/gemini-3-pro", project: FIXTURE_PROJECT_C, input: 5600, output: 1400, reasoning: 260, cacheRead: 740, cacheWrite: 120, createdAt: new Date("2026-08-30T09:00:00.000Z") }),
+    rec({ provider: "opencode", model: "openai/gpt-5", project: FIXTURE_PROJECT_A, input: 4300, output: 1100, reasoning: 190, cacheRead: 540, cacheWrite: 80, createdAt: new Date("2026-08-29T16:00:00.000Z") }),
   ];
 
   // Compute window totals from records — needed because renderer reads totalsByWindow/totals, not derived totals
@@ -82,7 +93,7 @@ function makeUnifiedFixture() {
     capturedAt: NOW,
     windows,
     source: "unified",
-    version: "0.1.0",
+    version: "0.1.1",
     records,
     totals: totalsByWindow,
     totalsByWindow,

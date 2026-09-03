@@ -78,8 +78,9 @@ test("JSON emits exact windows and stable metadata", () => {
   const json = toJSONSnapshot(fixture());
   assert.deepEqual(Object.keys(json), [
     "schemaVersion", "windows", "source", "version", "lastUpdated",
-    "nextRefreshAt", "stale", "coverage", "totals", "trends", "models", "providers",
+    "nextRefreshAt", "stale", "coverage", "totals", "costs", "trends", "models", "providers",
     "projects", "providersByWindow", "projectsByWindow", "totalsByProvider", "totalsByProject",
+    "costsByProvider", "costsByProject",
   ]);
   assert.equal(json.windows.day.from, "2026-09-01T21:00:00.000Z");
   assert.equal(json.windows.week.to, "2026-09-06T21:00:00.000Z");
@@ -89,7 +90,7 @@ test("JSON emits exact windows and stable metadata", () => {
   assert.equal(json.nextRefreshAt, "2026-09-02T10:05:00.000Z");
   assert.equal(json.totals.day.recorded_total, 132);
   assert.equal(json.models[0]?.name, "openai/gpt-5");
-  assert.equal(json.providers[0]?.name, "openai");
+  assert.equal(json.providers[0]?.name, "opencode");
 });
 
 test("partial and stale snapshots remain visibly honest", () => {
@@ -285,6 +286,11 @@ test("message-scan model and provider breakdowns follow each window boundary", (
     recordFor("week/model", new Date(NOW.getTime() - 24 * 60 * 60 * 1_000), 33),
   ];
 
+  const expectedProviderTotals: Record<string, string> = {
+    hour: "11",
+    day: "33",
+    week: "66",
+  };
   for (const [selectedWindow, expectedModels, excludedModels] of [
     ["hour", ["hour/model"], ["day/model", "week/model"]],
     ["day", ["hour/model", "day/model"], ["week/model"]],
@@ -306,9 +312,9 @@ test("message-scan model and provider breakdowns follow each window boundary", (
     for (const otherModel of excludedModels) {
       assert.doesNotMatch(models, new RegExp(otherModel.replace("/", "\\/")), `unexpected model in ${selectedWindow}`);
     }
-    for (const [provider, total] of expectedModels.map((model) => [model.split("/", 1)[0], model.startsWith("hour") ? "11" : model.startsWith("day") ? "22" : "33"] as const)) {
-      assert.match(output.slice(providersStart), new RegExp(`\\b${provider}\\s+${total}`));
-    }
+    // Providers use raw provider names (opencode/codex/antigravity) to match
+    // Unified totalsByProvider keys; vendor lives in Models breakdown.
+    assert.match(output.slice(providersStart), new RegExp(`\\bopencode\\s+${expectedProviderTotals[selectedWindow]}`));
   }
 });
 
@@ -329,17 +335,17 @@ test("trend graph remains ANSI-free with no-color and colored when enabled", () 
   assert.match(plain, /Trend · today/);
 });
 
-test("JSON snapshot uses schemaVersion 3 and exposes totalsByProvider per window", () => {
+test("JSON snapshot uses schemaVersion 4 and exposes totalsByProvider per window", () => {
   const json = toJSONSnapshot(fixture());
-  assert.equal(json.schemaVersion, 3);
+  assert.equal(json.schemaVersion, 4);
   assert.ok(json.totalsByProvider);
   for (const kind of ["hour", "day", "week"] as const) {
     assert.ok(kind in json.totalsByProvider);
     assert.ok(kind in json.providersByWindow);
   }
   // Single-provider fixture: totalsByProvider matches providers list
-  assert.ok(Object.keys(json.totalsByProvider.day).includes("openai"));
-  assert.equal(json.totalsByProvider.day["openai"]?.recorded_total, 132);
+  assert.ok(Object.keys(json.totalsByProvider.day).includes("opencode"));
+  assert.equal(json.totalsByProvider.day["opencode"]?.recorded_total, 132);
   assert.equal(json.providers.length, 1);
   assert.equal(json.providersByWindow.day.length, 1);
 });
@@ -373,21 +379,32 @@ test("unified multi-provider JSON and dashboard render without loss", () => {
     coverage: { complete: true, sessionsDiscovered: 3, sessionsScanned: 3, sessionsSkipped: 0, pagesRead: 3, jobsRetried: 0, provisionalMessages: 0, errors: [] },
   };
   const json = toJSONSnapshot(input);
-  assert.equal(json.schemaVersion, 3);
+  assert.equal(json.schemaVersion, 4);
   assert.equal(json.source, "unified");
-  // All three providers appear in aggregated providers list (openai vendor for opencode, plus codex/antigravity)
+  // All three providers appear in aggregated providers list (raw opencode/codex/antigravity to match Unified keys)
   const names = json.providers.map((p) => p.name).sort();
-  assert.ok(names.includes("openai"));
+  assert.ok(names.includes("opencode"));
   assert.ok(names.includes("codex"));
   assert.ok(names.includes("antigravity"));
   assert.ok(json.totalsByProvider.hour["codex"]);
   assert.ok(json.totalsByProvider.hour["antigravity"]);
   assert.equal(json.totalsByProvider.hour["codex"]?.input, 50);
   assert.equal(json.totalsByProvider.hour["antigravity"]?.input, 30);
+  assert.ok(json.costs);
+  assert.ok(json.costsByProvider);
+  assert.ok(json.costsByProject);
+  for (const kind of ["hour", "day", "week"] as const) {
+    assert.ok(kind in json.costs);
+    assert.ok(kind in json.costsByProvider);
+    assert.ok(kind in json.costsByProject);
+  }
+  assert.ok(typeof json.costs.hour === "number" || json.costs.hour === null);
+  assert.ok(json.costsByProvider.hour["codex"] !== undefined);
+  assert.ok(json.costsByProvider.hour["antigravity"] !== undefined);
 
   const dash = renderDashboard(input, { isTTY: true, color: false, width: 100, now: NOW, selectedWindow: "day" });
   assert.match(dash, /Providers/);
-  assert.match(dash, /openai/);
+  assert.match(dash, /opencode/);
   assert.match(dash, /codex/);
   assert.match(dash, /antigravity/);
   // Provider stack line should contain percentages
