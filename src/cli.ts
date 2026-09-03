@@ -44,7 +44,7 @@ import {
 
 /**
  * CLI version is read from package.json (not hardcoded) so `--version` and
- * `--help` cannot drift. Falls back to "0.1.1" when the manifest is
+ * `--help` cannot drift. Falls back to "0.1.2" when the manifest is
  * unreachable (e.g. unusual bundling). Tries both src (`../package.json`)
  * and dist (`../../package.json`) layouts.
  */
@@ -62,7 +62,7 @@ function resolveCliVersion(): string {
   } catch {
     // createRequire itself failed — fall through to the fallback below.
   }
-  return "0.1.1";
+  return "0.1.2";
 }
 
 const VERSION = resolveCliVersion();

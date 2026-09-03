@@ -172,7 +172,7 @@ Settings persist under the cache directory (`~/Library/Caches/oc2token` on macOS
 ## 🖥️ CLI reference
 
 ```
-oc2token 0.1.1
+oc2token 0.1.2
 
 Usage:
   oc2token [hour|day|week]
@@ -271,7 +271,7 @@ Emits **all three windows**, `costs`, `totalsByProvider`/`totalsByProject`, `tre
 {
   "schemaVersion": 4,
   "source": "unified",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "windows": { "hour": { "kind": "hour", "from": "…", "to": "…", "label": "last 60 minutes" }, "day": {}, "week": {} },
   "totals": { "hour": { "recorded_total": 15582 }, "day": {}, "week": {} },
   "costs": { "hour": 0.042, "day": null, "week": null },

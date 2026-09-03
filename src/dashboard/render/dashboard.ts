@@ -848,7 +848,7 @@ export function renderDashboard(
     lines.push(emphasis("Coverage errors", color));
     for (const error of snapshot.coverage.errors.slice(0, 5)) {
       const message = (error as { message?: string }).message;
-      const label = message ? safeIdentifier(message) : safeIdentifier(error.code);
+      const label = message ? safeLabel(message) : safeIdentifier(error.code);
       lines.push(`  ${label}${error.sessionID ? ` (${safeIdentifier(error.sessionID)})` : ""}`);
     }
   }

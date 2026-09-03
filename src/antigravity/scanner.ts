@@ -324,7 +324,6 @@ export async function collectAntigravity(request: CollectionRequest): Promise<Co
     // upserts are idempotent on the stable record key.
     let fileHadRows = false;
     let fileHadError = false;
-    let emptyUsageRows = 0;
 
     const processRow = (row: { idx: number; data: unknown }): void => {
       assertNotAborted(request.signal);
@@ -342,10 +341,9 @@ export async function collectAntigravity(request: CollectionRequest): Promise<Co
       const usageFields = parseProtoFields(usageBytes ?? new Uint8Array());
 
       if (usageFields.length === 0) {
-        // No usage payload in this row: nothing billable to record. Counted
-        // and surfaced as one aggregated coverage error per file below rather
-        // than silently skipped or per-row spam.
-        emptyUsageRows += 1;
+        // No usage payload: normal for non-assistant rows (user messages,
+        // system rows, in-progress generations). Nothing billable — skip
+        // silently, not a coverage error.
         return;
       }
 
@@ -523,21 +521,6 @@ export async function collectAntigravity(request: CollectionRequest): Promise<Co
       } catch {
         // ignore close errors; if busy, count as skipped
       }
-    }
-
-    if (emptyUsageRows > 0) {
-      fileHadError = true;
-      mutable.errors.push(
-        toCollectionError(
-          new DomainError(
-            "invalid-data",
-            `${emptyUsageRows} gen_metadata row(s) without usage fields in ${cascadeId}`,
-            { sessionID: cascadeId },
-          ),
-          "invalid-data",
-          cascadeId,
-        ),
-      );
     }
 
     if (fileHadRows && !fileHadError) {
