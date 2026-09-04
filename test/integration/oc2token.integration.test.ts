@@ -426,14 +426,14 @@ function capturedIO(): CapturedIO {
 test("CLI help and JSON parse errors are available offline", async () => {
   const help = capturedIO();
   assert.equal(await main(["--help"], help.io), 0);
-  assert.match(help.stdout(), /oc2token 0\.1\.2/);
+  assert.match(help.stdout(), /oc2token 0\.1\.3/);
   assert.match(help.stdout(), /--refresh <seconds>/);
   assert.match(help.stdout(), /--timezone <IANA>/);
   assert.equal(help.stderr(), "");
 
   const version = capturedIO();
   assert.equal(await main(["--version"], version.io), 0);
-  assert.equal(version.stdout(), "0.1.2\n");
+  assert.equal(version.stdout(), "0.1.3\n");
   assert.equal(version.stderr(), "");
 
   const invalid = capturedIO();

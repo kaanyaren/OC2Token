@@ -580,6 +580,17 @@ function breakdownForWindow(
     if (aliasMap !== null) return aliasMap;
   }
 
+  // Message scans carry individual records rather than stats aggregates, so
+  // derive the selected window directly from record creation timestamps.
+  // This must come BEFORE the global fallback: otherwise an empty hour/day
+  // inherits the week's global breakdown (week totals leak into hour/day).
+  // When records exist, per-window truth is the window-filtered derivation
+  // (possibly empty, which is correct). Stats sources have no records, so
+  // they fall through to the global aggregates below.
+  if (Array.isArray(root.records) && root.records.length > 0) {
+    return recordsAsBreakdown(root, key, window);
+  }
+
   const global = key === "model"
     ? root.models ?? root.modelTotals ?? asRecord(root.breakdown).models
     : key === "provider"
@@ -588,12 +599,6 @@ function breakdownForWindow(
   if (Array.isArray(global)) return normalizeBreakdown(global);
   const globalMap = breakdownFromMap(global);
   if (globalMap !== null) return globalMap;
-
-  // Message scans carry individual records rather than stats aggregates, so
-  // derive the selected window directly from record creation timestamps.
-  if (Array.isArray(root.records) && root.records.length > 0) {
-    return recordsAsBreakdown(root, key, window);
-  }
 
   return normalizeBreakdown(global);
 }

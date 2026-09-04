@@ -24,16 +24,19 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
   const lines = [title];
   if (values.length === 0) return [...lines, "  (none)"];
 
-  const rows = values.slice(0, TABLE_ROW_CAP).map((item) => [
-    item.provider
-      ? `${safeIdentifier(item.provider)}/${safeIdentifier(item.name)}`
-      : safeIdentifier(item.name),
+  const rows = values.slice(0, TABLE_ROW_CAP).map((item) => {
+    const prov = item.provider ? safeIdentifier(item.provider) : "";
+    const nm = safeIdentifier(item.name);
+    const display = prov && prov !== nm ? `${prov}/${nm}` : nm;
+    return [
+      display,
     formatExactTokenCount(item.totals.recorded_total),
     formatExactTokenCount(item.totals.input),
     formatExactTokenCount(item.totals.output + item.totals.reasoning),
     formatExactTokenCount(item.totals.cacheRead + item.totals.cacheWrite),
     formatCost(item.cost),
-  ]);
+    ];
+  });
   const widths = [
     Math.max("Name".length, ...rows.map((row) => row[0].length)),
     Math.max("Recorded".length, ...rows.map((row) => row[1].length)),

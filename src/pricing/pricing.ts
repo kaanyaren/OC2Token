@@ -242,13 +242,6 @@ const EXACT_PRICING: Record<string, ModelPricing> = {
   "opencode/mimo-v2.5": PRICING_ZEN_MIMO,
   "opencode/muse-spark-1.2": PRICING_ZEN_MUSE_SPARK,
   "opencode/qwen3.7-plus": PRICING_ZEN_QWEN_37_MAX,
-  // Provider-level aliases
-  "openai": PRICING_GPT5,
-  "anthropic": PRICING_CLAUDE_SONNET5,
-  "google": PRICING_GEMINI_25_PRO,
-  "opencode": PRICING_ZEN_GPT5,
-  "codex": PRICING_GPT5,
-  "antigravity": PRICING_GEMINI_25_PRO,
 };
 
 function stripPricingSuffix(value: string): string {

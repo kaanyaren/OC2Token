@@ -140,9 +140,16 @@ test("piped auto output is plain table and redraw is in-place ANSI only", () => 
 });
 
 test("safe labels cannot inject terminal controls or line breaks", () => {
-  const output = renderDashboard(fixture({
-    models: [{ name: "prompt\n\u001b[31msecret", totals: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 } }],
-  }), { isTTY: true, color: false, width: 100 });
+  const evil = createUsageRecord({
+    sessionID: "evil-session",
+    messageID: "evil-message",
+    createdAt: new Date("2026-09-02T09:55:00.000Z"),
+    model: "prompt\n\u001b[31msecret",
+    tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    observedAt: NOW,
+    completeness: "final",
+  });
+  const output = renderDashboard(fixture({ records: [evil] }), { isTTY: true, color: false, width: 100 });
   assert.doesNotMatch(output, /\u001b\[/);
   assert.doesNotMatch(output, /prompt\n/);
   assert.match(output, /prompt_secret/);

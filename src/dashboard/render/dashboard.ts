@@ -425,7 +425,9 @@ function renderBreakdown(
       : "";
   lines.push(`  ${themePurple("NAME".padEnd(nameWidth), color, true)} ${themeOrange("RECORDED".padStart(8), color, true)}${details}`);
   for (const item of visible) {
-    const rawName = item.provider ? `${safeIdentifier(item.provider)}/${safeIdentifier(item.name)}` : safeIdentifier(item.name);
+    const safeProv = item.provider ? safeIdentifier(item.provider) : "";
+    const safeNm = safeIdentifier(item.name);
+    const rawName = safeProv && safeProv !== safeNm ? `${safeProv}/${safeNm}` : safeNm;
     const safeName = truncate(rawName, nameWidth);
     const countText = formatTokenCount(item.totals.recorded_total).padStart(8);
     const inPlain = formatTokenCount(item.totals.input);

@@ -503,25 +503,33 @@ export class UnifiedUsageSource implements UsageSource {
     const projectsMutable: Record<string, ReadonlyArray<UsageBreakdown>> = {};
 
     for (const w of request.windows) {
-      // Single-source breakdowns: recomputed splits describe the same records
-      // as the supplied per-source splits, so using both would double-count.
-      // Prefer the recomputed split; fall back to merged supplied splits only
-      // when the window has no records (e.g. stats totals without records).
+      // Recomputed splits cover record-based sources (codex/antigravity/
+      // message-scan). Supplied splits from those same sources describe the
+      // SAME records, so merging both would double-count. Stats-only sources
+      // (opencode stats, no records) have no recomputed coverage, so their
+      // supplied splits must be preserved. Partition by records presence.
       const recomputed = buildBreakdowns(records, w);
-      const suppliedProviders = successful.flatMap(({ result }) => result.providersByWindow?.[w.kind] ?? []);
-      if (recomputed.providers.length > 0) {
+      const statsOnly = successful.filter(({ result }) => result.records.length === 0);
+      const suppliedProviders = statsOnly.flatMap(({ result }) => result.providersByWindow?.[w.kind] ?? []);
+      if (recomputed.providers.length > 0 && suppliedProviders.length > 0) {
+        providersMutable[w.kind] = mergeBreakdowns([...recomputed.providers, ...suppliedProviders]);
+      } else if (recomputed.providers.length > 0) {
         providersMutable[w.kind] = recomputed.providers;
       } else if (suppliedProviders.length > 0) {
         providersMutable[w.kind] = mergeBreakdowns(suppliedProviders);
       }
-      const suppliedModels = successful.flatMap(({ result }) => result.modelsByWindow?.[w.kind] ?? []);
-      if (recomputed.models.length > 0) {
+      const suppliedModels = statsOnly.flatMap(({ result }) => result.modelsByWindow?.[w.kind] ?? []);
+      if (recomputed.models.length > 0 && suppliedModels.length > 0) {
+        modelsMutable[w.kind] = mergeBreakdowns([...recomputed.models, ...suppliedModels]);
+      } else if (recomputed.models.length > 0) {
         modelsMutable[w.kind] = recomputed.models;
       } else if (suppliedModels.length > 0) {
         modelsMutable[w.kind] = mergeBreakdowns(suppliedModels);
       }
-      const suppliedProjects = successful.flatMap(({ result }) => result.projectsByWindow?.[w.kind] ?? []);
-      if (recomputed.projects.length > 0) {
+      const suppliedProjects = statsOnly.flatMap(({ result }) => result.projectsByWindow?.[w.kind] ?? []);
+      if (recomputed.projects.length > 0 && suppliedProjects.length > 0) {
+        projectsMutable[w.kind] = mergeBreakdowns([...recomputed.projects, ...suppliedProjects]);
+      } else if (recomputed.projects.length > 0) {
         projectsMutable[w.kind] = recomputed.projects;
       } else if (suppliedProjects.length > 0) {
         projectsMutable[w.kind] = mergeBreakdowns(suppliedProjects);
