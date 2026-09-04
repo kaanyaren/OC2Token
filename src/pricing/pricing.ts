@@ -1,9 +1,9 @@
 import type { UsageTotals } from "../domain/tokens.js";
 
 /** Version of this pricing table. Bump on any rate/model change. */
-export const PRICING_VERSION = 1;
+export const PRICING_VERSION = 2;
 /** ISO date the rates in this table were last verified against official sources. */
-export const PRICING_AS_OF = "2026-09-02";
+export const PRICING_AS_OF = "2026-09-04";
 
 export interface ModelPricing {
   readonly input: number; // USD per 1M input tokens
@@ -13,11 +13,16 @@ export interface ModelPricing {
   readonly cacheWrite: number; // USD per 1M cacheWrite tokens
 }
 
-// Per-model pricing per 1M tokens (USD) — updated 2026-09-02 from official sources:
+// Per-model pricing per 1M tokens (USD) — updated 2026-09-04 from official sources:
 // - OpenAI: openai.com/api/pricing, Azure, pricepertoken.com
 // - Anthropic: anthropic.com/pricing, platform.claude.com
 // - Google: ai.google.dev/gemini-api/docs/pricing
-// - OpenCode Zen: opencode.ai/zen + opencode.ai/docs/zen + opencode.ai/docs/go (opencode/* at-cost, 2026-09-02)
+// - OpenCode Zen: opencode.ai/zen + opencode.ai/docs/zen + opencode.ai/docs/go (opencode/* at-cost, 2026-09-04)
+// - OpenRouter fallback for opencode/* models missing from Zen docs:
+//   openrouter.ai/api/v1/models + openrouter.ai/meta/muse-spark-1.3-contributor
+//   (paid Contributor SKU not listed in Zen docs, only the Free variant is).
+//   Meta docs (developer.meta.com/ai/models/muse-spark, dev.meta.ai/docs/pricing-rate-limits)
+//   agree with OpenRouter: Contributor $0.10 in / $0.20 out / $0.002 cached input.
 // Unknown models return undefined (no generic fallback) per spec, except opencode/* which has explicit Zen pricing.
 
 // OpenAI GPT-5 family
@@ -85,6 +90,12 @@ const PRICING_ZEN_DEEPSEEK_V4_PRO: ModelPricing = { input: 0.66, output: 1.98, r
 const PRICING_ZEN_DEEPSEEK_V4_FLASH: ModelPricing = { input: 0.22, output: 0.66, reasoning: 0.66, cacheRead: 0.007, cacheWrite: 0.22 };
 const PRICING_ZEN_MIMO: ModelPricing = { input: 0.14, output: 0.28, reasoning: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 };
 const PRICING_ZEN_MUSE_SPARK: ModelPricing = { input: 1.25, output: 4.25, reasoning: 4.25, cacheRead: 0.15, cacheWrite: 1.25 };
+// Paid Contributor SKU — NOT in Zen docs (Zen only lists the Free variant as Free).
+// From OpenRouter (meta/muse-spark-1.3-contributor, meta/muse-spark-1.2-contributor)
+// + Meta docs: $0.10 in / $0.20 out / $0.002 cached input. reasoning = output,
+// cacheWrite = input (same convention as the standard Muse Spark entry above).
+const PRICING_ZEN_MUSE_SPARK_CONTRIBUTOR: ModelPricing = { input: 0.10, output: 0.20, reasoning: 0.20, cacheRead: 0.002, cacheWrite: 0.10 };
+const PRICING_FREE: ModelPricing = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
 
 const PRICING_GEMINI_3_PRO = PRICING_GEMINI_31_PRO;
 const PRICING_GEMINI_3_FLASH = PRICING_GEMINI_36_FLASH;
@@ -224,6 +235,11 @@ const EXACT_PRICING: Record<string, ModelPricing> = {
   "opencode-go/minimax-m3": PRICING_ZEN_MINIMAX_M3,
   "opencode-go/mimo-v2.5": PRICING_ZEN_MIMO,
   "opencode-go/muse-spark-1.2": PRICING_ZEN_MUSE_SPARK,
+  "opencode-go/muse-spark-1.3": PRICING_ZEN_MUSE_SPARK,
+  "opencode-go/muse-spark-1.2-contributor": PRICING_ZEN_MUSE_SPARK_CONTRIBUTOR,
+  "opencode-go/muse-spark-1.3-contributor": PRICING_ZEN_MUSE_SPARK_CONTRIBUTOR,
+  "opencode-go/muse-spark-1.2-contributor-free": PRICING_FREE,
+  "opencode-go/muse-spark-1.3-contributor-free": PRICING_FREE,
   "opencode/go/kimi-k2.5": PRICING_ZEN_KIMI_K2_5,
   // Zen open models (opencode/*)
   "opencode/minimax-m2.5": PRICING_ZEN_MINIMAX_M25,
@@ -241,6 +257,11 @@ const EXACT_PRICING: Record<string, ModelPricing> = {
   "opencode/deepseek-v4-flash": PRICING_ZEN_DEEPSEEK_V4_FLASH,
   "opencode/mimo-v2.5": PRICING_ZEN_MIMO,
   "opencode/muse-spark-1.2": PRICING_ZEN_MUSE_SPARK,
+  "opencode/muse-spark-1.3": PRICING_ZEN_MUSE_SPARK,
+  "opencode/muse-spark-1.2-contributor": PRICING_ZEN_MUSE_SPARK_CONTRIBUTOR,
+  "opencode/muse-spark-1.3-contributor": PRICING_ZEN_MUSE_SPARK_CONTRIBUTOR,
+  "opencode/muse-spark-1.2-contributor-free": PRICING_FREE,
+  "opencode/muse-spark-1.3-contributor-free": PRICING_FREE,
   "opencode/qwen3.7-plus": PRICING_ZEN_QWEN_37_MAX,
 };
 
@@ -372,7 +393,11 @@ function fuzzyPricingFor(m: string): ModelPricing | undefined {
     return PRICING_ZEN_DEEPSEEK_V4_PRO;
   }
   if (m.includes("mimo")) return PRICING_ZEN_MIMO;
-  if (m.includes("muse") && m.includes("spark")) return PRICING_ZEN_MUSE_SPARK;
+  if (m.includes("muse") && m.includes("spark")) {
+    if (m.includes("contributor-free") || m.endsWith("-free")) return PRICING_FREE;
+    if (m.includes("contributor")) return PRICING_ZEN_MUSE_SPARK_CONTRIBUTOR;
+    return PRICING_ZEN_MUSE_SPARK;
+  }
 
   if (m.includes("gemini")) {
     if (m.includes("3.7")) return PRICING_GEMINI_37_FLASH;

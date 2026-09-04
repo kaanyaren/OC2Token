@@ -93,7 +93,7 @@ function makeUnifiedFixture() {
     capturedAt: NOW,
     windows,
     source: "unified",
-    version: "0.1.3",
+    version: "0.1.4",
     records,
     totals: totalsByWindow,
     totalsByWindow,
