@@ -32,6 +32,8 @@ export interface UsageBreakdown {
   readonly name: string;
   readonly provider?: string;
   readonly totals: UsageTotals;
+  /** Estimated USD cost for this aggregate when its source can attribute models. */
+  readonly cost?: number;
 }
 
 export type UsageBreakdownsByWindow = Readonly<

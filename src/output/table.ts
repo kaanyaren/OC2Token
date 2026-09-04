@@ -13,31 +13,34 @@ import {
 } from "../dashboard/render/format.js";
 
 function tableRow(columns: ReadonlyArray<string>, widths: ReadonlyArray<number>): string {
-  return columns.map((column, index) => column.padEnd(widths[index] ?? column.length)).join("  ");
+  // Name stays left-aligned; numeric columns (Recorded/In/Out/Cache/Cost)
+  // are right-aligned so values line up on the right-hand side.
+  return columns
+    .map((column, index) =>
+      index === 0 ? column.padEnd(widths[index] ?? column.length) : column.padStart(widths[index] ?? column.length),
+    )
+    .join("  ");
 }
 
-function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): string[] {
-  // Merges match the dashboard: Out = output + reasoning, Cache =
-  // cacheRead + cacheWrite. Raw five-component splits are in stable JSON.
-  // Cap is TABLE_ROW_CAP (20) for piped/log completeness; the interactive
-  // dashboard caps at DASHBOARD_ROW_CAP (12) for TTY height. Intentional.
-  const lines = [title];
-  if (values.length === 0) return [...lines, "  (none)"];
-
-  const rows = values.slice(0, TABLE_ROW_CAP).map((item) => {
+function breakdownRows(values: ReadonlyArray<BreakdownTotal>): string[][] {
+  return values.slice(0, TABLE_ROW_CAP).map((item) => {
     const prov = item.provider ? safeIdentifier(item.provider) : "";
     const nm = safeIdentifier(item.name);
     const display = prov && prov !== nm ? `${prov}/${nm}` : nm;
     return [
       display,
-    formatExactTokenCount(item.totals.recorded_total),
-    formatExactTokenCount(item.totals.input),
-    formatExactTokenCount(item.totals.output + item.totals.reasoning),
-    formatExactTokenCount(item.totals.cacheRead + item.totals.cacheWrite),
-    formatCost(item.cost),
+      formatExactTokenCount(item.totals.recorded_total),
+      formatExactTokenCount(item.totals.input),
+      formatExactTokenCount(item.totals.output + item.totals.reasoning),
+      formatExactTokenCount(item.totals.cacheRead + item.totals.cacheWrite),
+      formatCost(item.cost),
     ];
   });
-  const widths = [
+}
+
+function breakdownWidths(values: ReadonlyArray<BreakdownTotal>): number[] {
+  const rows = breakdownRows(values);
+  return [
     Math.max("Name".length, ...rows.map((row) => row[0].length)),
     Math.max("Recorded".length, ...rows.map((row) => row[1].length)),
     Math.max("In".length, ...rows.map((row) => row[2].length)),
@@ -45,6 +48,22 @@ function renderSection(title: string, values: ReadonlyArray<BreakdownTotal>): st
     Math.max("Cache".length, ...rows.map((row) => row[4].length)),
     Math.max("Cost".length, ...rows.map((row) => row[5].length)),
   ];
+}
+
+function renderSection(
+  title: string,
+  values: ReadonlyArray<BreakdownTotal>,
+  sharedWidths?: ReadonlyArray<number>,
+): string[] {
+  // Merges match the dashboard: Out = output + reasoning, Cache =
+  // cacheRead + cacheWrite. Raw five-component splits are in stable JSON.
+  // Cap is TABLE_ROW_CAP (20) for piped/log completeness; the interactive
+  // dashboard caps at DASHBOARD_ROW_CAP (12) for TTY height. Intentional.
+  const lines = [title];
+  if (values.length === 0) return [...lines, "  (none)"];
+
+  const rows = breakdownRows(values);
+  const widths = sharedWidths ?? breakdownWidths(values);
   lines.push(tableRow(["Name", "Recorded", "In", "Out", "Cache", "Cost"], widths));
   lines.push(tableRow(widths.map((width) => "-".repeat(width)), widths));
   lines.push(...rows.map((row) => tableRow(row, widths)));
@@ -62,7 +81,7 @@ export function renderTable(input: DashboardSnapshotInput): string {
     const win = snapshot.windows[kind];
     const totals = win.totals;
     rows.push([
-      kind === "hour" ? "Last hour" : kind === "day" ? "Today" : "This week",
+      kind === "hour" ? "Last hour" : kind === "day" ? "Today" : kind === "week" ? "This week" : "Last month",
       formatExactTokenCount(totals.recorded_total),
       formatExactTokenCount(totals.input),
       formatExactTokenCount(totals.output + totals.reasoning),
@@ -86,6 +105,11 @@ export function renderTable(input: DashboardSnapshotInput): string {
   const sortedProjects = [...snapshot.projects].sort(
     (a, b) => b.totals.recorded_total - a.totals.recorded_total || a.name.localeCompare(b.name),
   );
+  const sharedBreakdownWidths = breakdownWidths([
+    ...snapshot.models,
+    ...sortedProviders,
+    ...sortedProjects,
+  ]);
   const lines = [
     "OpenCode 2 Token Usage",
     `Source: ${safeIdentifier(displaySource)}  Version: ${safeIdentifier(snapshot.version)}`,
@@ -95,11 +119,11 @@ export function renderTable(input: DashboardSnapshotInput): string {
     tableRow(rows[0].map((column) => "-".repeat(column.length)), widths),
     ...rows.slice(1).map((row) => tableRow(row, widths)),
     "",
-    ...renderSection("Models", snapshot.models),
+    ...renderSection("Models", snapshot.models, sharedBreakdownWidths),
     "",
-    ...renderSection("Providers", sortedProviders),
+    ...renderSection("Providers", sortedProviders, sharedBreakdownWidths),
     "",
-    ...renderSection("Projects", sortedProjects),
+    ...renderSection("Projects", sortedProjects, sharedBreakdownWidths),
   ];
   return lines.join("\n");
 }

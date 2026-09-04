@@ -13,6 +13,7 @@ import {
   type UsageSource,
 } from "../../src/domain/index.js";
 import { UnifiedUsageSource } from "../../src/application.js";
+import { renderDashboard } from "../../src/dashboard/render/dashboard.js";
 
 const NOW = new Date("2026-09-02T10:00:00.000Z");
 function windows() {
@@ -96,6 +97,37 @@ test("UnifiedUsageSource sums all providers into unified totals and provider bre
   assert.equal(result.providersByWindow?.day?.length, 3);
   const providerNames = result.providersByWindow?.day?.map((p) => p.name).sort();
   assert.deepEqual(providerNames, ["antigravity", "codex", "opencode"].sort());
+});
+
+test("UnifiedUsageSource renders model-derived costs for provider and project tables", async () => {
+  const wins = windows();
+  const rec = createUsageRecord({
+    sessionID: "priced-session",
+    messageID: "priced-message",
+    createdAt: new Date("2026-09-02T09:55:00.000Z"),
+    model: "openai/gpt-5",
+    tokens: { input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    observedAt: NOW,
+    completeness: "final",
+    provider: "opencode",
+    project: "priced-project",
+  });
+  const result = await new UnifiedUsageSource(
+    sourceReturning({
+      capturedAt: NOW,
+      windows: wins,
+      source: "message-scan",
+      records: [rec],
+      totalsByWindow: { hour: sumUsageRecords([rec], wins[0]!), day: sumUsageRecords([rec], wins[1]!), week: sumUsageRecords([rec], wins[2]!), month: sumUsageRecords([rec], wins[3]!) },
+      coverage: emptyProviderResult("message-scan").coverage,
+    }),
+    sourceReturning(emptyProviderResult("codex")),
+    sourceReturning(emptyProviderResult("antigravity")),
+  ).collect(request());
+
+  const output = renderDashboard(result, { isTTY: true, color: false, width: 100, selectedWindow: "day" });
+  assert.match(output, /opencode\s+1M[\s\S]*\$1\.25/);
+  assert.match(output, /priced-project\s+1M[\s\S]*\$1\.25/);
 });
 
 test("UnifiedUsageSource deterministic sorting despite random completion order", async () => {

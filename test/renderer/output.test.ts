@@ -7,6 +7,9 @@ import {
 } from "../../src/domain/index.js";
 import {
   ANSI,
+  GITHUB_URL,
+  footerClickAction,
+  footerTokenAtX,
   formatTokenCount,
   renderDashboard,
   renderInPlace,
@@ -16,6 +19,7 @@ import {
   toJSONSnapshot,
   usageTotalsFrom,
 } from "../../src/output/index.js";
+import { normalizeSettings } from "../../src/dashboard/settings/index.js";
 
 const NOW = new Date("2026-09-02T10:00:00.000Z");
 
@@ -115,17 +119,47 @@ test("interactive header keeps the top bar focused on the app identity", () => {
 
 test("narrow dashboard uses one column and contains the navigation footer", () => {
   const output = renderDashboard(fixture(), { isTTY: true, color: false, width: 60, now: NOW });
-  const cardRows = output.split("\n").filter((line) => line.startsWith("╭"));
-  assert.equal(cardRows.length, 3);
+  const cardRows = output.split("\n").filter((line) => line.trimStart().startsWith("╭") && line.indexOf("╭") === 2);
+  assert.equal(cardRows.length, 4);
   assert.ok(cardRows.every((line) => !line.includes("╮  ╭")));
   assert.match(output, /r Refresh/);
   assert.doesNotMatch(output, /\u001b\[/);
+});
+
+test("dashboard applies a two-character outer gutter", () => {
+  const output = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
+  for (const line of output.split("\n")) {
+    assert.equal(line.length, 100);
+    assert.ok(line.startsWith("  "));
+    assert.ok(line.endsWith("  "));
+  }
+  const card = output.split("\n").find((line) => line.includes("╭"));
+  assert.equal(card?.indexOf("╭"), 2);
+});
+
+test("GitHub credit exposes a clickable URL in TTY and plain modes", () => {
+  const colored = renderDashboard(fixture(), { isTTY: true, ansi: true, color: true, width: 100, now: NOW });
+  assert.ok(colored.includes(GITHUB_URL));
+  assert.ok(colored.includes(`\u001b]8;;${GITHUB_URL}\u0007`));
+
+  const plain = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
+  assert.match(plain, new RegExp(GITHUB_URL.replaceAll("/", "\\/")));
+  assert.doesNotMatch(plain, /\u001b\[/);
 });
 
 test("very narrow dashboard truncates every line instead of relying on wrapping", () => {
   for (const width of [20, 40]) {
     const output = renderDashboard(fixture(), { isTTY: true, color: false, width, now: NOW });
     assert.ok(output.split("\n").every((line) => [...line].length <= width));
+  }
+});
+
+test("month card stays within responsive dashboard widths", () => {
+  for (const width of [60, 90, 100, 113, 114]) {
+    const output = renderDashboard(fixture(), { isTTY: true, color: false, width, now: NOW });
+    assert.ok(output.includes("LAST MONTH"));
+    assert.doesNotMatch(output, /Range /);
+    assert.ok(output.split("\n").every((line) => [...line].length <= width), `line overflow at width ${width}`);
   }
 });
 
@@ -137,6 +171,37 @@ test("piped auto output is plain table and redraw is in-place ANSI only", () => 
   assert.ok(frame.startsWith(ANSI.cursorHome));
   assert.ok(frame.includes(ANSI.clearLine));
   assert.doesNotMatch(frame, /\u001b\[2J/);
+});
+
+test("piped breakdown tables share right-aligned numeric column edges", () => {
+  const table = renderOutput(fixture({
+    models: [{
+      name: "model",
+      totals: toUsageTotals({ input: 123_456_789, output: 2, reasoning: 0, cacheRead: 3, cacheWrite: 0 }),
+      cost: 12.34,
+    }],
+    providers: [{
+      name: "provider",
+      totals: toUsageTotals({ input: 1, output: 9_876_543, reasoning: 0, cacheRead: 999_999, cacheWrite: 0 }),
+      cost: 1.2,
+    }],
+    projects: [{
+      name: "project",
+      totals: toUsageTotals({ input: 1, output: 1, reasoning: 0, cacheRead: 1, cacheWrite: 0 }),
+      cost: 123.45,
+    }],
+  }), { format: "table", isTTY: false });
+
+  const endsFor = (title: string): number[] => {
+    const start = table.indexOf(`${title}\n`);
+    assert.ok(start >= 0, `missing ${title} table`);
+    const header = table.slice(start).split("\n").find((line) => line.includes("Recorded"));
+    assert.ok(header !== undefined, `missing ${title} header`);
+    return ["Recorded", "In", "Out", "Cache", "Cost"].map((label) => header.indexOf(label) + label.length);
+  };
+
+  assert.deepEqual(endsFor("Models"), endsFor("Providers"));
+  assert.deepEqual(endsFor("Models"), endsFor("Projects"));
 });
 
 test("safe labels cannot inject terminal controls or line breaks", () => {
@@ -179,6 +244,17 @@ test("colored dashboard keeps semantic status colors behind the ANSI option", ()
   assert.ok(output.includes(ANSI.reset));
   assert.ok(output.includes(ANSI.purpleBright));
   assert.match(output, /TOKEN USAGE|Models|Providers/);
+});
+
+test("top card titles are bold bright white", () => {
+  const output = renderDashboard(fixture(), {
+    isTTY: true,
+    ansi: true,
+    color: true,
+    width: 120,
+    now: NOW,
+  });
+  assert.ok(output.includes(`${ANSI.bold}${ANSI.whiteBright}· LAST MONTH`));
 });
 
 test("purple/orange theme helpers are ANSI-gated and support bright accents", () => {
@@ -236,10 +312,10 @@ test("stats snapshots use persisted trend buckets when records are empty", () =>
     source: "stats",
     records: [],
     trendsByWindow: {
-      day: Array.from({ length: 24 }, (_, index) => ({
-        label: `${String(index).padStart(2, "0")}:00`,
-        from: new Date(NOW.getTime() - (24 - index) * 60 * 60 * 1_000),
-        to: new Date(NOW.getTime() - (23 - index) * 60 * 60 * 1_000),
+      day: Array.from({ length: 288 }, (_, index) => ({
+        label: `${String(Math.floor(index / 12)).padStart(2, "0")}:${String((index % 12) * 5).padStart(2, "0")}`,
+        from: new Date(NOW.getTime() - (288 - index) * 5 * 60 * 1_000),
+        to: new Date(NOW.getTime() - (287 - index) * 5 * 60 * 1_000),
         totals: toUsageTotals({
           input: index === 12 ? 250 : 0,
           output: 0,
@@ -284,6 +360,48 @@ test("models and providers use the selected window breakdown values", () => {
   assert.match(providers, /openai\s+333/);
   assert.doesNotMatch(models, /openai\/gpt-5\s+1\b/);
   assert.doesNotMatch(providers, /openai\s+2\b/);
+});
+
+test("breakdown tables share right-aligned numeric column edges", () => {
+  const output = renderDashboard(fixture({
+    records: [],
+    modelsByWindow: {
+      day: [{
+        name: "model",
+        totals: toUsageTotals({ input: 123_456_789, output: 2, reasoning: 0, cacheRead: 3, cacheWrite: 0 }),
+        cost: 12.34,
+      }],
+    },
+    providersByWindow: {
+      day: [{
+        name: "provider",
+        totals: toUsageTotals({ input: 1, output: 9_876_543, reasoning: 0, cacheRead: 999_999, cacheWrite: 0 }),
+        cost: 1.2,
+      }],
+    },
+    projectsByWindow: {
+      day: [{
+        name: "project",
+        totals: toUsageTotals({ input: 1, output: 1, reasoning: 0, cacheRead: 1, cacheWrite: 0 }),
+        cost: 123.45,
+      }],
+    },
+  }), { isTTY: true, color: false, width: 100, selectedWindow: "day", now: NOW });
+
+  const endsFor = (title: string, rowName: string): number[] => {
+    const start = output.indexOf(`◆ ${title} · TODAY`);
+    assert.ok(start >= 0, `missing ${title} table`);
+    const header = output.slice(start).split("\n").find((line) => line.includes("RECORDED"));
+    assert.ok(header !== undefined, `missing ${title} header`);
+    assert.equal(header.length, 100, `${title} numeric header should reach the right edge`);
+    const row = output.slice(start).split("\n").find((line) => line.includes(rowName));
+    assert.ok(row !== undefined, `missing ${title} row`);
+    assert.equal(row.length, 100, `${title} numeric row should reach the right edge`);
+    return ["RECORDED", "In", "Out", "Cache", "Cost"].map((label) => header.indexOf(label) + label.length);
+  };
+
+  assert.deepEqual(endsFor("Models", "model"), endsFor("Providers", "provider"));
+  assert.deepEqual(endsFor("Models", "model"), endsFor("Projects", "project"));
 });
 
 test("message-scan model and provider breakdowns follow each window boundary", () => {
@@ -346,7 +464,7 @@ test("JSON snapshot uses schemaVersion 4 and exposes totalsByProvider per window
   const json = toJSONSnapshot(fixture());
   assert.equal(json.schemaVersion, 4);
   assert.ok(json.totalsByProvider);
-  for (const kind of ["hour", "day", "week"] as const) {
+  for (const kind of ["hour", "day", "week", "month"] as const) {
     assert.ok(kind in json.totalsByProvider);
     assert.ok(kind in json.providersByWindow);
   }
@@ -400,7 +518,7 @@ test("unified multi-provider JSON and dashboard render without loss", () => {
   assert.ok(json.costs);
   assert.ok(json.costsByProvider);
   assert.ok(json.costsByProject);
-  for (const kind of ["hour", "day", "week"] as const) {
+  for (const kind of ["hour", "day", "week", "month"] as const) {
     assert.ok(kind in json.costs);
     assert.ok(kind in json.costsByProvider);
     assert.ok(kind in json.costsByProject);
@@ -414,8 +532,8 @@ test("unified multi-provider JSON and dashboard render without loss", () => {
   assert.match(dash, /opencode/);
   assert.match(dash, /codex/);
   assert.match(dash, /antigravity/);
-  // Provider stack line should contain percentages
-  assert.match(dash, /\(\d+%\)/);
+  // No inline provider percentages under the top cards (removed by design)
+  assert.doesNotMatch(dash, /\(\d+%\)/);
   // Table rendering also contains unified source
   const table = renderOutput(input, { format: "table", isTTY: false });
   assert.match(table, /Source: unified/);
@@ -441,4 +559,88 @@ test("provider stack stacks vertically under narrow width", () => {
   assert.match(narrow, /Providers/);
   // Ensure no ANSI when color false
   assert.doesNotMatch(narrow, /\u001b\[/);
+});
+
+test("footer click tokens map to dashboard actions", () => {
+  assert.equal(footerClickAction("r"), "refresh");
+  assert.equal(footerClickAction("Refresh"), "refresh");
+  assert.equal(footerClickAction("1"), "hour");
+  assert.equal(footerClickAction("Hour"), "hour");
+  assert.equal(footerClickAction("2"), "day");
+  assert.equal(footerClickAction("Today"), "day");
+  assert.equal(footerClickAction("3"), "week");
+  assert.equal(footerClickAction("Week"), "week");
+  assert.equal(footerClickAction("4"), "month");
+  assert.equal(footerClickAction("Month"), "month");
+  assert.equal(footerClickAction("p"), "projects");
+  assert.equal(footerClickAction("Proj"), "projects");
+  assert.equal(footerClickAction("Projects"), "projects");
+  assert.equal(footerClickAction("s"), "settings");
+  assert.equal(footerClickAction("Settings"), "settings");
+  assert.equal(footerClickAction("q"), "quit");
+  assert.equal(footerClickAction("Quit"), "quit");
+  assert.equal(footerClickAction("?"), "help");
+  assert.equal(footerClickAction("Help"), "help");
+  // Decorative tokens have no action.
+  assert.equal(footerClickAction("1/2/3/4"), undefined);
+  assert.equal(footerClickAction("Periods"), undefined);
+  assert.equal(footerClickAction("Navigate"), undefined);
+  assert.equal(footerClickAction("Tab/Arrows"), undefined);
+  assert.equal(footerClickAction("close"), undefined);
+  assert.equal(footerClickAction(""), undefined);
+});
+
+test("footer token lookup resolves the word under a 1-based column", () => {
+  const line = " r Refresh   1 Hour";
+  assert.equal(footerTokenAtX(line, 1), undefined); // leading space
+  assert.equal(footerTokenAtX(line, 2), "r");
+  assert.equal(footerTokenAtX(line, 4), "Refresh");
+  assert.equal(footerTokenAtX(line, 10), "Refresh");
+  assert.equal(footerTokenAtX(line, 11), undefined); // gap
+  assert.equal(footerTokenAtX(line, 14), "1");
+  assert.equal(footerTokenAtX(line, 16), "Hour");
+  assert.equal(footerTokenAtX(line, 99), undefined);
+});
+
+test("breakdown tables toggle from settings and default to shown", () => {
+  // Legacy settings files without the flags show both tables.
+  assert.equal(normalizeSettings({}).showProvidersTable, true);
+  assert.equal(normalizeSettings({}).showProjectsTable, true);
+  assert.equal(normalizeSettings(null).showProvidersTable, true);
+  assert.equal(
+    normalizeSettings({ showProvidersTable: false, showProjectsTable: false }).showProvidersTable,
+    false,
+  );
+
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const totals = toUsageTotals({ input: 10, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+  const base: Record<string, unknown> = {
+    capturedAt: NOW,
+    windows,
+    source: "message-scan",
+    records: [recordFor("openai/gpt-5", new Date("2026-09-02T09:55:00.000Z"), 10)],
+    totalsByWindow: { hour: totals, day: totals, week: totals },
+    coverage: { complete: true, sessionsDiscovered: 1, sessionsScanned: 1, sessionsSkipped: 0, pagesRead: 1, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const view = (flags: object) => renderDashboard(base, {
+    isTTY: true,
+    color: false,
+    width: 100,
+    selectedWindow: "day",
+    settings: {
+      visible: false,
+      enabledProviders: ["opencode"],
+      refreshIntervalSeconds: 300,
+      focusedIndex: 0,
+      ...flags,
+    },
+  });
+  const bothOff = view({ showProvidersTable: false, showProjectsTable: false });
+  assert.match(bothOff, /◆ Models ·/);
+  assert.doesNotMatch(bothOff, /◆ Providers ·/);
+  assert.doesNotMatch(bothOff, /◆ Projects ·/);
+  const legacy = view({});
+  assert.match(legacy, /◆ Models ·/);
+  assert.match(legacy, /◆ Providers ·/);
+  assert.match(legacy, /◆ Projects ·/);
 });

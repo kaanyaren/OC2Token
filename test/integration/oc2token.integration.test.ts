@@ -142,6 +142,23 @@ class ScopedBreakdownTransport extends HybridFixtureTransport {
   }
 }
 
+class CostedStatsTransport extends HybridFixtureTransport {
+  async listProjects() {
+    return [{ id: "project-1", canonical: "priced-project" }];
+  }
+
+  async getSessionStats(window: UsageWindow): Promise<OpenCodeSessionStats> {
+    const result = await super.getSessionStats(window);
+    const totals = toUsageTotals({ input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+    return {
+      ...result,
+      totals,
+      models: [{ name: "openai/gpt-5", provider: "openai", totals }],
+      providers: [{ name: "openai", totals }],
+    };
+  }
+}
+
 class BoundedStatsTransport extends HybridFixtureTransport {
   active = 0;
   maxActive = 0;
@@ -179,19 +196,22 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
 
   assert.equal(result.source, "stats");
   assert.equal(result.records.length, 0);
-  assert.deepEqual(transport.statsCalls, ["hour", "day", "week"]);
+  assert.deepEqual(transport.statsCalls, ["hour", "day", "week", "month"]);
   assert.deepEqual(transport.trendCalls, [
-    ...Array.from({ length: 12 }, () => "hour" as const),
-    ...Array.from({ length: 24 }, () => "day" as const),
+    ...Array.from({ length: 60 }, () => "hour" as const),
+     ...Array.from({ length: 288 }, () => "day" as const),
     ...Array.from({ length: 7 }, () => "week" as const),
+    ...Array.from({ length: 30 }, () => "month" as const),
   ]);
-  assert.equal(result.trendsByWindow?.hour?.length, 12);
-  assert.equal(result.trendsByWindow?.day?.length, 24);
+  assert.equal(result.trendsByWindow?.hour?.length, 60);
+  assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.equal(result.trendsByWindow?.week?.length, 7);
+  assert.equal(result.trendsByWindow?.month?.length, 30);
   assert.equal(transport.sessionCalls.length, 0);
   assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);
   assert.equal(result.totalsByWindow.week?.recorded_total, 103);
+  assert.equal(result.totalsByWindow.month?.recorded_total, 104);
   assert.equal(result.serverFingerprint, "fixture-beta:123");
 });
 
@@ -201,6 +221,7 @@ test("OpenCodeStatsSource retains model/provider breakdowns for each window", as
   assert.equal(result.modelsByWindow?.hour?.[0]?.totals.recorded_total, 11);
   assert.equal(result.modelsByWindow?.day?.[0]?.totals.recorded_total, 22);
   assert.equal(result.modelsByWindow?.week?.[0]?.totals.recorded_total, 33);
+  assert.equal(result.modelsByWindow?.month?.[0]?.totals.recorded_total, 33);
   assert.equal(result.providersByWindow?.hour?.[0]?.totals.recorded_total, 21);
   assert.equal(result.providersByWindow?.day?.[0]?.totals.recorded_total, 32);
   assert.equal(result.providersByWindow?.week?.[0]?.totals.recorded_total, 43);
@@ -210,8 +231,20 @@ test("OpenCodeStatsSource bounds concurrent trend requests", async () => {
   const transport = new BoundedStatsTransport();
   const result = await new OpenCodeStatsSource(transport).collect(request());
 
-  assert.equal(result.trendsByWindow?.day?.length, 24);
+  assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.ok(transport.maxActive <= 4);
+});
+
+test("OpenCodeStatsSource carries model-derived costs to provider and project tables", async () => {
+  const transport = new CostedStatsTransport();
+  const result = await new OpenCodeStatsSource(transport).collect({
+    capturedAt: NOW,
+    windows: Object.values(createUsageWindows(NOW, "UTC")),
+  });
+
+  assert.equal(result.modelsByWindow?.day?.[0]?.cost, 1.25);
+  assert.equal(result.providersByWindow?.day?.[0]?.cost, 1.25);
+  assert.equal(result.projectsByWindow?.day?.[0]?.cost, 1.25);
 });
 
 test("HybridUsageSource falls back for the whole refresh when stats ignores one range", async () => {
@@ -343,8 +376,8 @@ test("UnifiedUsageSource retains OpenCode stats totals and trends", async () => 
 
   assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);
-  assert.equal(result.trendsByWindow?.hour?.length, 12);
-  assert.equal(result.trendsByWindow?.day?.length, 24);
+  assert.equal(result.trendsByWindow?.hour?.length, 60);
+  assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.equal(result.trendsByWindow?.week?.length, 7);
 });
 
@@ -391,6 +424,55 @@ test("CachedUsageSource keeps in-memory data and exposes cache_busy under lock c
     } finally {
       await held.release();
     }
+  });
+});
+
+test("CachedUsageSource names the underlying cause when the cache cannot be updated", async () => {
+  await withDirectory(async (directory) => {
+    // A regular file where the cache directory should be makes recursive
+    // mkdir fail deterministically (EEXIST) for every user and platform.
+    const blocker = join(directory, "cache");
+    await fs.writeFile(blocker, "not a directory\n");
+    const result = await new CachedUsageSource(
+      sourceReturning(partialResult()),
+      new NormalizedCacheStore(blocker),
+    ).collect(request());
+
+    assert.equal(result.records.length, 1);
+    assert.equal(result.coverage.complete, false);
+    const cacheError = result.coverage.errors.find((error) => error.code === "cache-unavailable");
+    assert.ok(cacheError);
+    assert.equal(cacheError?.retryable, true);
+    assert.match(cacheError?.message ?? "", /could not be updated \(EEXIST\)/);
+  });
+});
+
+test("CachedUsageSource persists float breakdown costs instead of reporting cache-unavailable", async () => {
+  await withDirectory(async (directory) => {
+    // Stats sources attach float costs (e.g. $0.0003) to model/provider
+    // breakdowns. The manifest snapshot must accept them: rejecting
+    // non-integer numbers here fails every commit while costs are present.
+    const base = partialResult();
+    const dayTotals = base.totalsByWindow.day!;
+    const withCosts: CollectionResult = {
+      ...base,
+      models: [{ name: "fixture/model", totals: dayTotals, cost: 0.0003 }],
+      providers: [{ name: "opencode", provider: "opencode", totals: dayTotals, cost: 0.0003 }],
+    };
+    const store = new NormalizedCacheStore(directory);
+    const result = await new CachedUsageSource(
+      sourceReturning(withCosts),
+      store,
+    ).collect(request());
+
+    assert.equal(
+      result.coverage.errors.find((error) => error.code === "cache-unavailable"),
+      undefined,
+    );
+    const cached = await store.readDetailed();
+    assert.equal(cached.status, "available");
+    if (cached.status !== "available") return;
+    assert.equal(cached.snapshot.models?.[0]?.cost, 0.0003);
   });
 });
 

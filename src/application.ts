@@ -43,6 +43,7 @@ import {
   type OpenCode2Adapter,
   type OpenCodeAdapterOptions,
 } from "./opencode/index.js";
+import { costForTokens, pricingForModel } from "./pricing/pricing.js";
 
 /** The default is intentionally explicit so a second CLI instance is safe. */
 export function defaultCacheDirectory(): string {
@@ -75,6 +76,34 @@ function errorFor(error: unknown): CollectionError {
   };
 }
 
+/** Walk an Error cause chain looking for a Node errno (EACCES, ENOSPC, …). */
+function errorCodeOf(error: unknown): string | undefined {
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!(current instanceof Error)) return undefined;
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
+ * The `cache_unavailable` commit result carries the underlying failure, but
+ * the old coverage message dropped it — every cache problem (permissions,
+ * full disk, stray file at the cache path, lock failure) rendered the same
+ * opaque line. Surface the errno/DomainError message so the next run names
+ * the cause. Codes only, never paths: coverage errors can end up in shared
+ * JSON snapshots.
+ */
+function cacheUnavailableMessage(error: unknown): string {
+  const base = "The normalized cache could not be updated";
+  const code = errorCodeOf(error);
+  if (code !== undefined) return `${base} (${code})`;
+  if (error instanceof Error && error.message.length > 0) return `${base} (${error.message})`;
+  return base;
+}
+
 function addUsageTotals(left: UsageTotals, right: UsageTotals): UsageTotals {
   return toUsageTotals({
     input: left.input + right.input,
@@ -94,6 +123,33 @@ function sortBreakdowns(values: Array<UsageBreakdown>): Array<UsageBreakdown> {
     (left, right) => right.totals.recorded_total - left.totals.recorded_total || left.name.localeCompare(right.name),
   );
   return values;
+}
+
+function costForRecords(records: ReadonlyArray<UsageRecord>): number | undefined {
+  const totalsByModel = new Map<string, UsageTotals>();
+  for (const record of records) {
+    if (record.completeness === "provisional") continue;
+    const current = totalsByModel.get(record.model) ?? emptyUsageTotals();
+    totalsByModel.set(record.model, addUsageTotals(current, {
+      input: record.input,
+      output: record.output,
+      reasoning: record.reasoning,
+      cacheRead: record.cacheRead,
+      cacheWrite: record.cacheWrite,
+      recorded_total: record.recorded_total,
+    }));
+  }
+
+  let total = 0;
+  let pricedModels = 0;
+  for (const [model, totals] of totalsByModel) {
+    const pricing = pricingForModel(model);
+    if (pricing === undefined) continue;
+    total += costForTokens(totals, pricing);
+    pricedModels += 1;
+  }
+  if (pricedModels === 0) return undefined;
+  return Math.round(total * 1_000_000) / 1_000_000;
 }
 
 /**
@@ -129,15 +185,31 @@ function buildBreakdowns(
   }
   const providers: Array<UsageBreakdown> = [];
   for (const [name, recs] of byProvider.entries()) {
-    providers.push({ name, provider: name, totals: sumUsageRecords(recs, window) });
+    const cost = costForRecords(recs);
+    providers.push({
+      name,
+      provider: name,
+      totals: sumUsageRecords(recs, window),
+      ...(cost === undefined ? {} : { cost }),
+    });
   }
   const models: Array<UsageBreakdown> = [];
   for (const [name, recs] of byModel.entries()) {
-    models.push({ name, totals: sumUsageRecords(recs, window) });
+    const cost = costForRecords(recs);
+    models.push({
+      name,
+      totals: sumUsageRecords(recs, window),
+      ...(cost === undefined ? {} : { cost }),
+    });
   }
   const projects: Array<UsageBreakdown> = [];
   for (const [name, recs] of byProject.entries()) {
-    projects.push({ name, totals: sumUsageRecords(recs, window) });
+    const cost = costForRecords(recs);
+    projects.push({
+      name,
+      totals: sumUsageRecords(recs, window),
+      ...(cost === undefined ? {} : { cost }),
+    });
   }
   return {
     providers: sortBreakdowns(providers),
@@ -151,12 +223,18 @@ function mergeBreakdowns(values: ReadonlyArray<UsageBreakdown>): ReadonlyArray<U
   for (const value of values) {
     const key = `${value.name}\0${value.provider ?? ""}`;
     const current = merged.get(key);
-    merged.set(
-      key,
-      current === undefined
-        ? value
-        : { ...current, totals: addUsageTotals(current.totals, value.totals) },
-    );
+    if (current === undefined) {
+      merged.set(key, value);
+      continue;
+    }
+    const cost = current.cost === undefined && value.cost === undefined
+      ? undefined
+      : (current.cost ?? 0) + (value.cost ?? 0);
+    merged.set(key, {
+      ...current,
+      totals: addUsageTotals(current.totals, value.totals),
+      ...(cost === undefined ? {} : { cost: Math.round(cost * 1_000_000) / 1_000_000 }),
+    });
   }
   return [...merged.values()].sort(
     (left, right) => right.totals.recorded_total - left.totals.recorded_total || left.name.localeCompare(right.name),
@@ -661,7 +739,7 @@ export class CachedUsageSource implements UsageSource {
       if (committed.status === "cache_unavailable") {
         return { ...result, coverage: appendError(result.coverage, {
           code: "cache-unavailable",
-          message: "The normalized cache could not be updated",
+          message: cacheUnavailableMessage(committed.error),
           retryable: true,
         }) };
       }

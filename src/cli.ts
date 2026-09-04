@@ -3,14 +3,20 @@
 import process from "node:process";
 import { basename } from "node:path";
 import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
 
 import {
   ANSI,
   createStableRedraw,
+  footerClickAction,
+  footerTokenAtX,
   getCardHitRegions,
+  GITHUB_URL,
+  REFRESH_PRESETS,
   renderDashboard,
   renderJSON,
   renderTable,
+  stripAnsi,
   type DashboardSnapshotInput,
 } from "./output/index.js";
 import {
@@ -41,6 +47,19 @@ import {
   saveDashboardSettings,
   type DashboardSettings,
 } from "./dashboard/settings/index.js";
+
+/** Launch a URL without blocking or inheriting the TUI's terminal streams. */
+export function openGithubPage(): void {
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", GITHUB_URL] : [GITHUB_URL];
+  try {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", () => undefined);
+    child.unref();
+  } catch {
+    // Opening a browser is best-effort; never take down the dashboard.
+  }
+}
 
 /**
  * CLI version is read from package.json (not hardcoded) so `--version` and
@@ -100,7 +119,7 @@ function usage(): string {
   return `oc2token ${VERSION}
 
 Usage:
-  oc2token [hour|day|week]
+  oc2token [hour|day|week|month]
   oc2token [options]
   oc2token doctor [--source <provider>] [--json]
 
@@ -119,7 +138,7 @@ Options:
   -h, --help             Show this help
   -v, --version          Show the version
 
-Dashboard keys: r refresh, 1/2/3 / click top card to select period, p projects, s settings, ? help, q quit.
+Dashboard keys: r refresh, 1/2/3/4 to select period, p projects, s settings, ? help, q quit. Mouse: click cards, footer actions, and settings rows.
 `;
 }
 
@@ -192,7 +211,7 @@ function parseArgs(args: readonly string[]): CliOptions | "help" | "version" {
       command = "doctor";
       continue;
     }
-    if (arg === "hour" || arg === "day" || arg === "week") {
+    if (arg === "hour" || arg === "day" || arg === "week" || arg === "month") {
       if (periodSeen) failUsage("Only one period can be selected");
       period = arg;
       periodSeen = true;
@@ -446,16 +465,24 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   let projectsVisible = false;
   let running = true;
 
+  // ANSI-stripped lines of the last drawn frame for mouse hit-testing.
+  // The cursor-home redraw paints frame line N on terminal row N (1-based).
+  let frameLines: string[] = [];
+
   // Settings UI state
   const settingsState: {
     visible: boolean;
     enabledProviders: Set<ProviderKind>;
     refreshIntervalSeconds: number;
+    showProvidersTable: boolean;
+    showProjectsTable: boolean;
     focusedIndex: number;
   } = {
     visible: false,
     enabledProviders: new Set(initialSettingsEnabled),
     refreshIntervalSeconds: initialSettingsInterval,
+    showProvidersTable: persisted?.showProvidersTable !== false,
+    showProjectsTable: persisted?.showProjectsTable !== false,
     focusedIndex: 0,
   };
   let appliedEnabled = new Set(settingsState.enabledProviders);
@@ -465,6 +492,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     void saveDashboardSettings({
       enabledProviders: [...settingsState.enabledProviders] as ProviderKind[],
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settingsState.refreshIntervalSeconds),
+      showProvidersTable: settingsState.showProvidersTable,
+      showProjectsTable: settingsState.showProjectsTable,
     }, options.cacheDirectory);
   };
 
@@ -520,18 +549,19 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       now: clock.wallNow(),
       selectedWindow: state.period,
       help,
-      ...(settingsState.visible
-        ? {
-            settings: {
-              visible: true,
-              enabledProviders: [...settingsState.enabledProviders].sort(),
-              refreshIntervalSeconds: settingsState.refreshIntervalSeconds,
-              focusedIndex: settingsState.focusedIndex,
-            },
-          }
-        : {}),
+      // Always pass table visibility so hidden tables stay hidden when the
+      // panel is closed; the panel itself only renders when visible.
+      settings: {
+        visible: settingsState.visible,
+        enabledProviders: [...settingsState.enabledProviders].sort(),
+        refreshIntervalSeconds: settingsState.refreshIntervalSeconds,
+        showProvidersTable: settingsState.showProvidersTable,
+        showProjectsTable: settingsState.showProjectsTable,
+        focusedIndex: settingsState.focusedIndex,
+      },
       ...(projectsVisible ? { projects: { visible: true } } : {}),
     });
+    frameLines = frame.split("\n").map((line) => stripAnsi(line));
     io.stdout.write(redraw.render(frame, { isTTY: true, ansi: true, color: options.color }));
   };
 
@@ -590,12 +620,156 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       (escapeFlushTimer as unknown as { unref(): void }).unref();
     }
   };
+  /**
+   * Mouse click dispatch (SGR button-0 press at 1-based cx/cy). Mirrors the
+   * keyboard actions: footer tokens act like their keys, settings rows toggle
+   * providers / scrub the refresh slider, and top cards select the period.
+   */
+  const handleClick = (cx: number, cy: number): void => {
+    // Settings panel rows capture their own clicks while open.
+    if (settingsState.visible) {
+      const line = frameLines[cy - 1];
+      if (line !== undefined) {
+        const hasBox = line.includes("◉") || line.includes("○");
+        if (hasBox && line.includes("Providers table")) {
+          settingsState.focusedIndex = 3;
+          settingsState.showProvidersTable = !settingsState.showProvidersTable;
+          persistCurrentSettings();
+          draw();
+          return;
+        }
+        if (hasBox && line.includes("Projects table")) {
+          settingsState.focusedIndex = 4;
+          settingsState.showProjectsTable = !settingsState.showProjectsTable;
+          persistCurrentSettings();
+          draw();
+          return;
+        }
+        const providers = [...ALL_KINDS];
+        const row = providers.findIndex(
+          (name) => (line.includes("◉") || line.includes("○")) && line.includes(name),
+        );
+        if (row !== -1) {
+          settingsState.focusedIndex = row;
+          const prov = providers[row]!;
+          if (settingsState.enabledProviders.has(prov)) {
+            if (settingsState.enabledProviders.size > 1) {
+              settingsState.enabledProviders.delete(prov);
+              applySettings();
+              draw();
+            }
+          } else {
+            settingsState.enabledProviders.add(prov);
+            applySettings();
+            draw();
+          }
+          return;
+        }
+        const lo = line.indexOf("1m");
+        const hi = line.indexOf("4h");
+        if (lo !== -1 && hi > lo) {
+          const frac = Math.min(1, Math.max(0, (cx - 1 - lo) / (hi + 2 - lo)));
+          const preset = REFRESH_PRESETS[Math.round(frac * (REFRESH_PRESETS.length - 1))]!;
+          if (preset !== settingsState.refreshIntervalSeconds) {
+            settingsState.refreshIntervalSeconds = preset;
+            settingsState.focusedIndex = 5;
+            applySettings();
+            draw();
+          }
+          return;
+        }
+      }
+    }
+    // Mouse reporting is enabled for the whole TUI, so the terminal cannot
+    // always handle OSC-8 hyperlinks itself. Open the credit target directly
+    // when its line receives a left click.
+    const clickedLine = frameLines[cy - 1];
+    if (clickedLine !== undefined && (clickedLine.includes(GITHUB_URL) || clickedLine.includes("Kaan Yaren"))) {
+      openGithubPage();
+      return;
+    }
+    // Footer tokens (below the Status line, skipping panels and credit).
+    const statusIdx = frameLines.findIndex((line) => line.includes("Status:"));
+    const footerLine = cy - 1 > statusIdx && statusIdx !== -1 ? frameLines[cy - 1] : undefined;
+    if (
+      footerLine !== undefined &&
+      footerLine.trim().length > 0 &&
+      !footerLine.includes("╭") && !footerLine.includes("╮") &&
+      !footerLine.includes("╰") && !footerLine.includes("│") &&
+      !footerLine.includes("Kaan Yaren")
+    ) {
+      const token = footerTokenAtX(footerLine, cx);
+      const action = footerClickAction(token ?? "");
+      if (action === "refresh") {
+        void coordinator.manualRefresh();
+        return;
+      }
+      if (action === "hour" || action === "day" || action === "week" || action === "month") {
+        coordinator.setPeriod(action);
+        draw();
+        return;
+      }
+      if (action === "projects") {
+        if (projectsVisible) projectsVisible = false;
+        else {
+          projectsVisible = true;
+          help = false;
+          settingsState.visible = false;
+        }
+        draw();
+        return;
+      }
+      if (action === "settings") {
+        if (settingsState.visible) settingsState.visible = false;
+        else {
+          settingsState.visible = true;
+          help = false;
+          projectsVisible = false;
+        }
+        draw();
+        return;
+      }
+      if (action === "quit") {
+        if (settingsState.visible) {
+          settingsState.visible = false;
+          draw();
+        } else if (projectsVisible) {
+          projectsVisible = false;
+          draw();
+        } else {
+          void stop();
+        }
+        return;
+      }
+      if (action === "help") {
+        if (!settingsState.visible) {
+          if (projectsVisible) projectsVisible = false;
+          help = !help;
+          draw();
+        }
+        return;
+      }
+      if (token !== undefined) return; // decorative footer token (Periods, Navigate, …)
+    }
+    // Top cards select the period (panels capture their own clicks above).
+    if (!settingsState.visible && !projectsVisible) {
+      const w = Math.max(20, io.stdout.columns || 100);
+      const regions = getCardHitRegions(w);
+      for (const r of regions) {
+        if (cx >= r.x1 && cx <= r.x2 && cy >= r.y1 && cy <= r.y2) {
+          coordinator.setPeriod(r.kind);
+          draw();
+          break;
+        }
+      }
+    }
+  };
   const onInput = (chunk: Buffer | string) => {
     clearEscapeFlush();
     inputBuffer += chunk.toString();
     const value = inputBuffer;
     inputBuffer = "";
-    const periods: UsageWindowKind[] = ["hour", "day", "week"];
+    const periods: UsageWindowKind[] = ["hour", "day", "week", "month"];
     const nextPeriod = (): UsageWindowKind => {
       const current = coordinator.getState().period;
       const idx = periods.indexOf(current);
@@ -640,17 +814,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const cx = Number(parts[1]);
           const cy = Number(parts[2]);
           if (Number.isFinite(cb) && Number.isFinite(cx) && Number.isFinite(cy) && cb === 0) {
-            if (!settingsState.visible && !projectsVisible) {
-              const w = Math.max(20, io.stdout.columns || 100);
-              const regions = getCardHitRegions(w);
-              for (const r of regions) {
-                if (cx >= r.x1 && cx <= r.x2 && cy >= r.y1 && cy <= r.y2) {
-                  coordinator.setPeriod(r.kind);
-                  draw();
-                  break;
-                }
-              }
-            }
+            handleClick(cx, cy);
           }
         }
         i = end + 1;
@@ -659,7 +823,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       if (value.startsWith("\u001b[", i)) {
         if (value.startsWith("\u001b[Z", i)) {
           if (settingsState.visible) {
-            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 4) % 4;
+            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 6;
             draw();
           } else {
             coordinator.setPeriod(prevPeriod());
@@ -678,19 +842,19 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const code = value[i + 2];
           if (settingsState.visible) {
             if (code === "A") {
-              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 4) % 4;
+              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 6;
               draw();
               i += 3;
               continue;
             }
             if (code === "B") {
-              settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 4;
+              settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 6;
               draw();
               i += 3;
               continue;
             }
             if (code === "C") {
-              if (settingsState.focusedIndex === 3) {
+              if (settingsState.focusedIndex === 5) {
                 const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, 1);
                 if (next !== settingsState.refreshIntervalSeconds) {
                   settingsState.refreshIntervalSeconds = next;
@@ -702,7 +866,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               continue;
             }
             if (code === "D") {
-              if (settingsState.focusedIndex === 3) {
+              if (settingsState.focusedIndex === 5) {
                 const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, -1);
                 if (next !== settingsState.refreshIntervalSeconds) {
                   settingsState.refreshIntervalSeconds = next;
@@ -768,7 +932,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "1" || key === "2" || key === "3") {
-          coordinator.setPeriod(key === "1" ? "hour" : key === "2" ? "day" : "week");
+          coordinator.setPeriod(key === "1" ? "hour" : key === "2" ? "day" : key === "3" ? "week" : "month");
           draw();
           i += 1;
           continue;
@@ -831,12 +995,20 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               applySettings();
               draw();
             }
+          } else if (settingsState.focusedIndex === 3) {
+            settingsState.showProvidersTable = !settingsState.showProvidersTable;
+            persistCurrentSettings();
+            draw();
+          } else if (settingsState.focusedIndex === 4) {
+            settingsState.showProjectsTable = !settingsState.showProjectsTable;
+            persistCurrentSettings();
+            draw();
           }
           i += 1;
           continue;
         }
         if (key === "\t" || key === "\u0009") {
-          settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 4;
+          settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 6;
           draw();
           i += 1;
           continue;
@@ -846,7 +1018,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "h" || key === "H") {
-          if (settingsState.focusedIndex === 3) {
+          if (settingsState.focusedIndex === 5) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, -1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -858,7 +1030,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "l" || key === "L") {
-          if (settingsState.focusedIndex === 3) {
+          if (settingsState.focusedIndex === 5) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, 1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -870,7 +1042,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "+" || key === "=") {
-          if (settingsState.focusedIndex === 3) {
+          if (settingsState.focusedIndex === 5) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, 1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -882,7 +1054,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "-" || key === "_") {
-          if (settingsState.focusedIndex === 3) {
+          if (settingsState.focusedIndex === 5) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, -1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -907,6 +1079,14 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               applySettings();
               draw();
             }
+          } else if (settingsState.focusedIndex === 3) {
+            settingsState.showProvidersTable = !settingsState.showProvidersTable;
+            persistCurrentSettings();
+            draw();
+          } else if (settingsState.focusedIndex === 4) {
+            settingsState.showProjectsTable = !settingsState.showProjectsTable;
+            persistCurrentSettings();
+            draw();
           }
           i += 1;
           continue;
@@ -940,8 +1120,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           i += 1;
           continue;
         }
-        if (key === "1" || key === "2" || key === "3") {
-          coordinator.setPeriod(key === "1" ? "hour" : key === "2" ? "day" : "week");
+        if (key === "1" || key === "2" || key === "3" || key === "4") {
+          coordinator.setPeriod(key === "1" ? "hour" : key === "2" ? "day" : key === "3" ? "week" : "month");
         }
         if (key === "p" || key === "P") {
           projectsVisible = true;

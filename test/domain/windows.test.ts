@@ -22,6 +22,16 @@ test("rolling hour is an exact half-open 60-minute instant interval", () => {
   assert.equal(containsInstant(window, window.to), false);
 });
 
+test("rolling month is an exact 30-day instant interval", () => {
+  const now = instant("2026-09-02T10:15:30.000Z");
+  const window = createUsageWindow("month", now, "Europe/Istanbul");
+
+  assert.equal(window.semantics, "rolling-month");
+  assert.equal(window.from.toISOString(), "2026-08-03T10:15:30.000Z");
+  assert.equal(window.to.toISOString(), now.toISOString());
+  assert.equal(hours(window.from, window.to), 30 * 24);
+});
+
 test("local day uses 23 and 25 elapsed hours across New York DST", () => {
   const spring = createUsageWindow(
     "day",
@@ -82,7 +92,7 @@ test("ISO week rolls on local Monday and preserves DST-safe bounds", () => {
 test("trend buckets partition each requested window", () => {
   const windows = createUsageWindows(instant("2026-09-02T10:15:30.000Z"), "Europe/Istanbul");
 
-  for (const [kind, expectedCount] of [["hour", 12], ["day", 24], ["week", 7]] as const) {
+  for (const [kind, expectedCount] of [["hour", 60], ["day", 288], ["week", 7], ["month", 30]] as const) {
     const window = windows[kind];
     const buckets = createUsageTrendBuckets(window);
     assert.equal(buckets.length, expectedCount);
@@ -106,10 +116,12 @@ test("trend buckets preserve missing and repeated DST hours", () => {
     "America/New_York",
   ));
 
-  assert.equal(spring.length, 23);
-  assert.equal(fall.length, 25);
+  assert.equal(spring.length, 23 * 12);
+  assert.equal(fall.length, 25 * 12);
   assert.equal(hours(spring[0]!.from, spring.at(-1)!.to), 23);
   assert.equal(hours(fall[0]!.from, fall.at(-1)!.to), 25);
+  assert.equal(spring[0]!.to.getTime() - spring[0]!.from.getTime(), 5 * 60 * 1_000);
+  assert.equal(fall[0]!.to.getTime() - fall[0]!.from.getTime(), 5 * 60 * 1_000);
   assert.equal(fall.filter((bucket) => bucket.label === "01:00").length, 2);
 });
 
@@ -136,7 +148,7 @@ test("DST 2026-03-08 spring-forward uses 23 hours and skips 02:00", () => {
   // 2026-03-08 DST transition: clocks jump 02:00→03:00, so elapsed is 23h
   assert.equal(hours(nyDay.from, nyDay.to), 23);
   const buckets = createUsageTrendBuckets(nyDay);
-  assert.equal(buckets.length, 23);
+  assert.equal(buckets.length, 23 * 12);
   assert.equal(buckets.some((b) => b.label === "02:00"), false);
 });
 

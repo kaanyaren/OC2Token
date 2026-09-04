@@ -18,6 +18,8 @@ import {
   themeOut,
   themeOutUnderline,
   themePurple,
+  themeWhite,
+  zebraRow,
 } from "./ansi.js";
 import {
   coverageState,
@@ -43,6 +45,12 @@ import { ALL_PROVIDER_KINDS } from "../settings/index.js";
 
 const CARD_MIN_WIDTH = 27;
 const WIDE_LAYOUT_MIN_WIDTH = 90;
+export const APP_PADDING = 2;
+export const GITHUB_URL = "https://github.com/kaanyaren/OC2Token";
+// ANSI/OSC sequences are intentionally matched here so outer padding can
+// truncate styled lines by visible width without removing their escapes.
+// eslint-disable-next-line no-control-regex
+const ANSI_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/y;
 
 function lineWidth(value: string): number {
   return [...stripAnsi(value)].length;
@@ -66,45 +74,55 @@ function truncateExact(value: string, width: number): string {
   return [...value].slice(0, Math.max(0, width - 1)).join("") + "…";
 }
 
+/** Truncate visible terminal width without stripping ANSI styling. */
+function truncateVisible(value: string, width: number): string {
+  if (lineWidth(value) <= width) return value;
+  const target = Math.max(0, width - 1);
+  let result = "";
+  let index = 0;
+  let visible = 0;
+  while (index < value.length && visible < target) {
+    if (value[index] === "\u001b") {
+      ANSI_SEQUENCE.lastIndex = index;
+      const escape = ANSI_SEQUENCE.exec(value);
+      if (escape?.index === index) {
+        result += escape[0];
+        index += escape[0].length;
+        continue;
+      }
+    }
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined) break;
+    const character = String.fromCodePoint(codePoint);
+    result += character;
+    index += character.length;
+    visible += 1;
+  }
+  return `${result}…${value.includes("\u001b") ? ANSI.reset : ""}`;
+}
+
 function colorizeBreakdown(value: string, enabled: boolean, underline = false): string {
   if (!enabled || value.length === 0) return value;
-  // Breakdown arrives as single-space separated tokens like "I 100 O 20 C 0"
-  // (legacy "In 100 Out 23 Cache 9" is also handled for back-compat)
-  const inFn = underline ? themeInUnderline : themeIn;
-  const outFn = underline ? themeOutUnderline : themeOut;
-  const cacheFn = underline ? themeCacheUnderline : themeCache;
+  // Breakdown arrives as gap-separated tokens like "IN 100    OUT 20    CACHE 0".
+  // truncateExact can cut the string mid-token ("IN 100    OU…"), so color each
+  // segment from its label to the next multi-space gap (or end of string).
+  // Alternatives are longest-first with a trailing-letter guard so truncated
+  // fragments ("OU", "CAC") still match without false positives inside words.
+  // Legacy short forms ("I", "In", …) are kept as fallbacks.
+  const specs: Array<{ labels: string[]; fn: (segment: string, on: boolean) => string }> = [
+    { labels: ["IN", "In", "I"], fn: underline ? themeInUnderline : themeIn },
+    { labels: ["OUT", "Out", "OU", "O"], fn: underline ? themeOutUnderline : themeOut },
+    { labels: ["CACHE", "Cache", "CACH", "CAC", "CA", "C"], fn: underline ? themeCacheUnderline : themeCache },
+  ];
   let result = value;
-  if (/\bI\s+[^\s]+/.test(result)) {
-    result = result.replace(/\bI\s+[^\s]+/, (match) => inFn(match, enabled));
-  } else {
-    result = result.replace(/\bIn\s+[^\s]+/, (match) => inFn(match, enabled));
-  }
-  if (/\bO\s+[^\s]+/.test(result)) {
-    result = result.replace(/\bO\s+[^\s]+/, (match) => outFn(match, enabled));
-  } else {
-    result = result.replace(/\bOut\s+[^\s]+/, (match) => outFn(match, enabled));
-  }
-  const hasShortCache = /\bC\s+[^\s]+/.test(result);
-  const hasLongCache = /\bCache\s+[^\s]+/.test(result);
-  if (hasShortCache) {
-    result = result.replace(/\bC\s+[^\s]+/, (match) => cacheFn(match, enabled));
-  } else if (hasLongCache) {
-    result = result.replace(/\bCache\s+[^\s]+/, (match) => cacheFn(match, enabled));
-  } else if (result.includes("C")) {
-    // Truncated cache token (e.g. "I 100 O 20 C" or "Ca…")
-    const idxC = result.lastIndexOf(" C");
-    const idxCa = result.indexOf("Ca");
-    const index = idxC !== -1 ? idxC + 1 : idxCa;
-    if (index !== -1) {
-      const before = result.slice(0, index);
-      const tail = result.slice(index);
-      if (!tail.includes(ANSI.cyan) && !tail.includes(ANSI.orange) && !tail.includes(ANSI.green)) {
-        result = before + cacheFn(tail, enabled);
-      }
-    } else if (result.trimEnd().endsWith("C")) {
-      // Single trailing C without value (heavily truncated)
-      result = result.replace(/C\s*$/, (m) => cacheFn(m, enabled));
-    }
+  for (const spec of specs) {
+    const match = new RegExp(`\\b(?:${spec.labels.join("|")})(?![A-Za-z])`).exec(result);
+    if (!match || match.index === undefined) continue;
+    const start = match.index;
+    const tail = result.slice(start);
+    const gap = tail.search(/\s{2,}/);
+    const end = gap === -1 ? result.length : start + gap;
+    result = result.slice(0, start) + spec.fn(result.slice(start, end), enabled) + result.slice(end);
   }
   return result;
 }
@@ -114,7 +132,7 @@ function border(width: number, left: string, fill: string, right: string): strin
 }
 
 function cardTitle(kind: UsageWindowKind): string {
-  return kind === "hour" ? "LAST 60 MINUTES" : kind === "day" ? "TODAY" : "THIS WEEK";
+  return kind === "hour" ? "LAST 60 MINUTES" : kind === "day" ? "TODAY" : kind === "week" ? "THIS WEEK" : "LAST MONTH";
 }
 
 function panelHeading(
@@ -141,43 +159,6 @@ function providerAccent(name: string, color: boolean, bright = false): (value: s
   if (key === "antigravity") return (value: string) => themeCyan(value, color, bright);
   return (value: string) => themePurple(value, color, bright);
 }
-
-function renderProviderStack(
-  providers: ReadonlyArray<BreakdownTotal>,
-  color: boolean,
-  width: number,
-): string[] {
-  if (providers.length === 0) return [];
-  const total = providers.reduce((sum, entry) => sum + entry.totals.recorded_total, 0);
-  const plainEntries = providers.slice(0, 3).map((entry) => {
-    const name = safeIdentifier(entry.name);
-    const count = formatTokenCount(entry.totals.recorded_total);
-    const pct = total > 0 ? Math.round((entry.totals.recorded_total / total) * 100) : 0;
-    return `${name} ${count} (${pct}%)`;
-  });
-  const coloredEntries = plainEntries.map((text, index) => {
-    const safe = truncate(text, Math.max(4, width - 4));
-    if (index === 0) return themePurple(safe, color, true);
-    if (index === 1) return themeOrange(safe, color, true);
-    return themeCyan(safe, color, true);
-  });
-  if (width < 78) {
-    const lines = [panelHeading("Providers", width, color, "orange")];
-    for (const part of coloredEntries) lines.push(`  ${part}`);
-    if (providers.length > 3) lines.push(`  +${providers.length - 3} more`);
-    return lines;
-  }
-  const heading = themePurple("Providers", color, true);
-  const joined = coloredEntries.join(themePurple(" · ", color));
-  const extra = providers.length > 3 ? themePurple(` · +${providers.length - 3} more`, color) : "";
-  const line = `${heading} · ${joined}${extra}`;
-  // Ensure the inline stack never exceeds terminal width
-  if ([...stripAnsi(line)].length > width) {
-    return [truncate(line, width)];
-  }
-  return [line];
-}
-
 
 function cardLines(
   kind: UsageWindowKind,
@@ -207,13 +188,10 @@ function cardLines(
   const costLine = `${themePurple(costLabel, color, true)}  ${themeCost(costValue, color)}`;
   const lines = [
     paint(border(width, "╭", "─", "╮"), borderColor, color),
-    frame(selected
-      ? themeOrange(truncate(title, inner), color, true)
-      : themePurple(truncate(title, inner), color, true)),
+    frame(emphasis(themeWhite(truncate(title, inner), color, true), color)),
     frame(first),
     frame(colorizeBreakdown(truncateExact(displayComponents, inner), color, true)),
     frame(pad(costLine, inner)),
-    frame(themeOrange(truncate(`Range ${safeLabel(window.window.label)}`, inner), color)),
     paint(border(width, "╰", "─", "╯"), borderColor, color),
   ];
   return lines;
@@ -227,9 +205,10 @@ function composeCards(cards: string[][], gap = 2): string[] {
   );
 }
 
-const HEADER_LINES = 4;
-const CARD_LINES = 7;
+const HEADER_LINES = 3;
+const CARD_LINES = 6;
 const CARD_GAP = 2;
+const FOUR_CARD_LAYOUT_MIN_WIDTH = CARD_MIN_WIDTH * 4 + CARD_GAP * 3;
 
 export interface CardHitRegion {
   readonly kind: UsageWindowKind;
@@ -241,24 +220,35 @@ export interface CardHitRegion {
 
 export function getCardHitRegions(width: number): ReadonlyArray<CardHitRegion> {
   const clamped = Math.max(20, width);
+  const contentWidth = Math.max(1, clamped - APP_PADDING * 2);
   const headerHeight = HEADER_LINES;
-  const isWide = clamped >= WIDE_LAYOUT_MIN_WIDTH;
-  if (isWide) {
-    const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((clamped - 4) / 3));
+  if (contentWidth >= FOUR_CARD_LAYOUT_MIN_WIDTH) {
+    const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP * 3) / 4));
     const y1 = headerHeight + 1;
     const y2 = y1 + CARD_LINES - 1;
     return allWindowKinds().map((kind, idx) => {
-      const x1 = idx * (cardWidth + CARD_GAP) + 1;
+      const x1 = APP_PADDING + idx * (cardWidth + CARD_GAP) + 1;
       const x2 = x1 + cardWidth - 1;
       return { kind, x1, y1, x2, y2 };
     });
   }
-  const cardWidth = Math.max(12, Math.min(CARD_MIN_WIDTH, clamped - 2));
-  const yGap = 1;
+  if (contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
+    const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP) / 2));
+    const yGap = 0; // stacked rows touch — no blank separator (see renderDashboard)
+    return allWindowKinds().map((kind, idx) => {
+      const column = idx % 2;
+      const row = Math.floor(idx / 2);
+      const x1 = APP_PADDING + column * (cardWidth + CARD_GAP) + 1;
+      const y1 = headerHeight + 1 + row * (CARD_LINES + yGap);
+      return { kind, x1, y1, x2: x1 + cardWidth - 1, y2: y1 + CARD_LINES - 1 };
+    });
+  }
+  const cardWidth = Math.max(12, Math.min(CARD_MIN_WIDTH, contentWidth - 2));
+  const yGap = 0; // stacked cards touch — no blank separator (see renderDashboard)
   return allWindowKinds().map((kind, idx) => {
     const y1 = headerHeight + 1 + idx * (CARD_LINES + yGap);
     const y2 = y1 + CARD_LINES - 1;
-    const x1 = 1;
+    const x1 = APP_PADDING + 1;
     const x2 = x1 + cardWidth - 1;
     return { kind, x1, y1, x2, y2 };
   });
@@ -270,27 +260,39 @@ function renderHeader(color: boolean, width: number): string[] {
     ? `${themeOrange("◈", color, true)} ${emphasis(themePurple("OC2", color, true), color)} ${themePurple("// TOKENS", color)}`
     : `${themeOrange("◈", color, true)} ${emphasis(themePurple("OC2TOKEN", color, true), color)}  ${themePurple("// USAGE CONSOLE", color)}`;
   const title = compact ? "OC2Token Usage" : "OpenCode 2 Token Usage";
+  // No trailing blank line: the top cards start directly under the rule to
+  // keep vertical spacing tight (HEADER_LINES must match this length).
   return [
     identity,
     emphasis(themePurple(truncate(title, width), color, true), color),
-    themePurple("─".repeat(Math.max(20, width)), color),
-    "",
+    themePurple("─".repeat(width), color),
   ];
 }
 
 /**
  * Single canonical TTY status footer. Uses the shared formatStatusFooter
  * helper (`Status: <STATE · sessions…>` once) — do not duplicate the coverage
- * string as `Status: X · Coverage: X`. Colored by coverageState; truncated to
- * width to preserve redraw geometry.
+ * string as `Status: X · Coverage: X`. Colored by coverageState, centered
+ * horizontally inside a box. Truncated to preserve redraw geometry.
  */
-function renderStatusFooter(
+function renderStatusBox(
   snapshot: ReturnType<typeof normalizeDashboardSnapshot>,
   color: boolean,
   width: number,
-): string {
+): string[] {
   const state = coverageState(snapshot.coverage, snapshot.stale);
-  return statusColor(truncate(formatStatusFooter(snapshot.coverage, snapshot.stale), width), state, color);
+  const maxContent = Math.max(1, width - 4);
+  const plain = truncate(formatStatusFooter(snapshot.coverage, snapshot.stale), maxContent);
+  const contentLen = [...plain].length;
+  const boxWidth = Math.min(width, contentLen + 4);
+  const leftPad = Math.max(0, Math.floor((width - boxWidth) / 2));
+  const prefix = " ".repeat(leftPad);
+  const colored = statusColor(plain, state, color);
+  return [
+    prefix + paint(border(boxWidth, "╭", "─", "╮"), ANSI.purpleDeep, color),
+    prefix + paint("│", ANSI.purpleDeep, color) + ` ${colored} ` + paint("│", ANSI.purpleDeep, color),
+    prefix + paint(border(boxWidth, "╰", "─", "╯"), ANSI.purpleDeep, color),
+  ];
 }
 
 function renderTrend(
@@ -301,10 +303,10 @@ function renderTrend(
 ): string[] {
   const trend = snapshot.windows[selected].trends;
   const title = `Trend · ${cardTitle(selected).toLowerCase()}`;
-  if (trend.length === 0) return [panelHeading(title, width, color), "  No trend data recorded."];
+  if (trend.length === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
 
   const max = Math.max(...trend.map((bucket) => bucket.totals.recorded_total), 0);
-  if (max === 0) return [panelHeading(title, width, color), "  No trend data recorded."];
+  if (max === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
 
   const graphWidth = Math.max(8, width - 4);
   const points =
@@ -379,12 +381,36 @@ function graphLabels(
   return characters.join("").trimEnd();
 }
 
+interface BreakdownColumnWidths {
+  readonly recorded: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cache: number;
+  readonly cost: number;
+}
+
+function breakdownColumnWidths(values: ReadonlyArray<BreakdownTotal>): BreakdownColumnWidths {
+  const recorded = values.map((item) => formatTokenCount(item.totals.recorded_total));
+  const input = values.map((item) => formatTokenCount(item.totals.input));
+  const output = values.map((item) => formatTokenCount(item.totals.output + item.totals.reasoning));
+  const cache = values.map((item) => formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite));
+  const cost = values.map((item) => formatCost(item.cost));
+  return {
+    recorded: Math.max("RECORDED".length, ...recorded.map((value) => [...value].length)),
+    input: Math.max("In".length, ...input.map((value) => [...value].length)),
+    output: Math.max("Out".length, ...output.map((value) => [...value].length)),
+    cache: Math.max("Cache".length, ...cache.map((value) => [...value].length)),
+    cost: Math.max("Cost".length, ...cost.map((value) => [...value].length)),
+  };
+}
+
 function renderBreakdown(
   title: string,
   values: ReadonlyArray<BreakdownTotal>,
   color: boolean,
   width: number,
   accent: "purple" | "orange" | "cyan",
+  columnWidths: BreakdownColumnWidths,
 ): string[] {
   // Token columns intentionally merge sub-components for TTY width:
   // Out = output + reasoning, Cache = cacheRead + cacheWrite (same as
@@ -399,23 +425,22 @@ function renderBreakdown(
   }
   const visible = values.slice(0, DASHBOARD_ROW_CAP);
   const isProvider = title.toLowerCase().includes("provider");
-  const nameWidth = Math.max(8, Math.min(42, Math.floor(width * 0.42)));
   const showTokenDetails = width >= 70;
   const showCost = width >= 32;
+  // Keep the complete numeric block against the right edge of the terminal.
+  // The name column gets the remaining space instead of using a fixed 42%
+  // width, which previously left all numeric columns beside the names.
+  const numericWidth = columnWidths.recorded
+    + (showTokenDetails ? columnWidths.input + columnWidths.output + columnWidths.cache : 0)
+    + (showCost ? columnWidths.cost : 0);
+  const separatorWidth = showTokenDetails ? 9 : showCost ? 5 : 3;
+  const nameWidth = Math.max(1, width - numericWidth - separatorWidth);
   // Table-aligned In/Out/Cache/Cost columns: header already shows labels, rows show only numbers.
-  const inStrs = visible.map((item) => formatTokenCount(item.totals.input));
-  const outStrs = visible.map((item) => formatTokenCount(item.totals.output + item.totals.reasoning));
-  const cacheStrs = visible.map((item) => formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite));
-  const costStrs = visible.map((item) => formatCost(item.cost));
-  const inWidth = Math.max("In".length, ...inStrs.map((s) => [...s].length));
-  const outWidth = Math.max("Out".length, ...outStrs.map((s) => [...s].length));
-  const cacheWidth = Math.max("Cache".length, ...cacheStrs.map((s) => [...s].length));
-  const costWidth = Math.max("Cost".length, ...costStrs.map((s) => [...s].length));
   // Header uses same column widths so values line up vertically (right-aligned numbers).
-  const headerIn = themeIn("In".padStart(inWidth), color);
-  const headerOut = themeOut("Out".padStart(outWidth), color);
-  const headerCache = themeCache("Cache".padStart(cacheWidth), color);
-  const headerCost = themeCost("Cost".padStart(costWidth), color);
+  const headerIn = themeIn("In".padStart(columnWidths.input), color);
+  const headerOut = themeOut("Out".padStart(columnWidths.output), color);
+  const headerCache = themeCache("Cache".padStart(columnWidths.cache), color);
+  const headerCost = themeCost("Cost".padStart(columnWidths.cost), color);
   const details = showTokenDetails
     ? showCost
       ? `  ${headerIn} ${headerOut} ${headerCache}  ${headerCost}`
@@ -423,21 +448,21 @@ function renderBreakdown(
     : showCost
       ? `  ${headerCost}`
       : "";
-  lines.push(`  ${themePurple("NAME".padEnd(nameWidth), color, true)} ${themeOrange("RECORDED".padStart(8), color, true)}${details}`);
-  for (const item of visible) {
+  lines.push(`  ${themePurple("NAME".padEnd(nameWidth), color, true)} ${themeOrange("RECORDED".padStart(columnWidths.recorded), color, true)}${details}`);
+  for (const [rowIndex, item] of visible.entries()) {
     const safeProv = item.provider ? safeIdentifier(item.provider) : "";
     const safeNm = safeIdentifier(item.name);
     const rawName = safeProv && safeProv !== safeNm ? `${safeProv}/${safeNm}` : safeNm;
     const safeName = truncate(rawName, nameWidth);
-    const countText = formatTokenCount(item.totals.recorded_total).padStart(8);
+    const countText = formatTokenCount(item.totals.recorded_total).padStart(columnWidths.recorded);
     const inPlain = formatTokenCount(item.totals.input);
     const outPlain = formatTokenCount(item.totals.output + item.totals.reasoning);
     const cachePlain = formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite);
     const costPlain = formatCost(item.cost);
-    const inCol = themeIn(inPlain.padStart(inWidth), color);
-    const outCol = themeOut(outPlain.padStart(outWidth), color);
-    const cacheCol = themeCache(cachePlain.padStart(cacheWidth), color);
-    const costCol = themeCost(costPlain.padStart(costWidth), color);
+    const inCol = themeIn(inPlain.padStart(columnWidths.input), color);
+    const outCol = themeOut(outPlain.padStart(columnWidths.output), color);
+    const cacheCol = themeCache(cachePlain.padStart(columnWidths.cache), color);
+    const costCol = themeCost(costPlain.padStart(columnWidths.cost), color);
     const componentDetails = showTokenDetails
       ? showCost
         ? `  ${inCol} ${outCol} ${cacheCol}  ${costCol}`
@@ -447,12 +472,16 @@ function renderBreakdown(
         : "";
     if (isProvider) {
       const accentForRow = providerAccent(item.name, color, true);
-      const countColored = accentForRow(countText.trimStart().padStart(8));
+      const countColored = accentForRow(countText);
       // Keep provider name in its accent but retain table alignment for token columns.
       const nameColored = accentForRow(safeName.padEnd(nameWidth));
-      lines.push(`  ${nameColored} ${countColored}${componentDetails}`);
+      lines.push(zebraRow(`  ${nameColored} ${countColored}${componentDetails}`, rowIndex % 2 === 1, color));
     } else {
-      lines.push(`  ${themePurple(safeName.padEnd(nameWidth), color)} ${themeOrange(countText, color)}${componentDetails}`);
+      lines.push(zebraRow(
+        `  ${themeWhite(safeName.padEnd(nameWidth), color)} ${themeOrange(countText, color)}${componentDetails}`,
+        rowIndex % 2 === 1,
+        color,
+      ));
     }
   }
   if (values.length > visible.length) {
@@ -482,12 +511,14 @@ function formatRefreshInterval(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+/** Refresh interval presets (seconds). Shared by the settings panel and mouse clicks. */
+export const REFRESH_PRESETS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400] as const;
+
 function renderSettingsPanel(
   settings: NonNullable<DashboardRenderOptions["settings"]>,
   width: number,
   color: boolean,
 ): string[] {
-  const REFRESH_PRESETS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400] as const;
   function presetIndex(value: number): number {
     const clamped = Math.max(60, Math.min(14400, Math.floor(value)));
     let best = 0;
@@ -550,8 +581,33 @@ function renderSettingsPanel(
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
+  // Breakdown tables heading (focused indices 3-4; interval moves to 5)
+  const tablesHeading = truncate("Tables  —  space to toggle", inner);
+  lines.push(padPrefix + `│${pad(themePurple(tablesHeading, color, true), inner)}│`);
+
+  const tableRows: ReadonlyArray<{ readonly label: string; readonly shown: boolean; readonly index: number }> = [
+    { label: "Providers table", shown: settings.showProvidersTable !== false, index: 3 },
+    { label: "Projects table", shown: settings.showProjectsTable !== false, index: 4 },
+  ];
+  for (const row of tableRows) {
+    const focused = settings.focusedIndex === row.index;
+    const checkbox = row.shown ? "◉" : "○";
+    const prefix = focused ? themeOrange("▶ ", color, true) : "  ";
+    const checkColored = row.shown ? themeOrange(checkbox, color, true) : themePurple(checkbox, color);
+    const suffix = focused ? "  ← toggle" : "";
+    const suffixLen = focused ? 10 : 0; // "  ← toggle" visible length
+    const nameAvail = Math.max(4, inner - 4 - suffixLen);
+    const nameTrunc = truncate(row.label, nameAvail);
+    const nameColored = row.shown ? themeWhite(nameTrunc, color, true) : themePurple(nameTrunc, color);
+    const lineContent = `${prefix}${checkColored} ${nameColored}`;
+    const full = focused ? `${lineContent}${themeOrange(suffix, color)}` : lineContent;
+    lines.push(padPrefix + `│${pad(full, inner)}│`);
+  }
+
+  lines.push(padPrefix + `│${" ".repeat(inner)}│`);
+
   // Refresh interval heading with value
-  const intervalFocused = settings.focusedIndex === 3;
+  const intervalFocused = settings.focusedIndex === 5;
   const intervalHeadingPlain = "Refresh interval";
   const headingAvail = Math.max(6, inner - intervalStr.length - 5 - (intervalFocused ? 2 : 0));
   const headingTrunc = truncate(intervalHeadingPlain, headingAvail);
@@ -638,7 +694,7 @@ function renderProjectsPanel(
   const inner = Math.max(1, panelWidth - 2);
   const leftPad = Math.max(0, Math.floor((width - panelWidth) / 2));
   const padPrefix = " ".repeat(leftPad);
-  const titleKind = selected === "hour" ? "Last 60 Minutes" : selected === "day" ? "Today" : "This Week";
+  const titleKind = selected === "hour" ? "Last 60 Minutes" : selected === "day" ? "Today" : selected === "week" ? "This Week" : "Last Month";
   const totalForWindow = snapshot.windows[selected]?.totals.recorded_total ?? 0;
 
   const lines: string[] = [];
@@ -737,13 +793,13 @@ function renderProjectsPanel(
   }
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
-  lines.push(padPrefix + `│${pad(themePurple(truncate("p / esc to close  •  1/2/3 switch period", inner), color), inner)}│`);
+  lines.push(padPrefix + `│${pad(themePurple(truncate("p / esc to close  •  1/2/3/4 switch period", inner), color), inner)}│`);
   lines.push(padPrefix + paint(border(panelWidth, "╰", "─", "╯"), ANSI.purpleDeep, color));
   return lines;
 }
 
 function renderCredit(width: number, color: boolean): string {
-  const repo = "github.com/kaanyaren/OC2Token";
+  const repo = GITHUB_URL;
   const full = `Kaan Yaren · ${repo}`;
   const plain = width < 45 ? "Kaan Yaren" : full;
   const truncated = truncate(plain, width);
@@ -767,7 +823,7 @@ function renderFooter(help: boolean, color: boolean, width: number): string[] {
       return [
         "",
         panelHeading("Help", width, color, "orange"),
-        ` ${key("r")} refresh  ${key("1/2/3")} periods ${key("p")} projects`,
+        ` ${key("r")} refresh  ${key("1/2/3/4")} periods ${key("p")} projects`,
         ` ${key("q")} quit  ${key("?")} close`,
       ];
     }
@@ -775,31 +831,108 @@ function renderFooter(help: boolean, color: boolean, width: number): string[] {
       return [
         "",
         panelHeading("Help", width, color, "orange"),
-        ` ${key("r/R")} Refresh   ${key("1/2/3")} Periods  ${key("p")} Projects`,
+        ` ${key("r/R")} Refresh   ${key("1/2/3/4")} Periods  ${key("p")} Projects`,
         ` ${key("q")} Quit   ${key("?")} Toggle help   ${key("s")} Settings`,
       ];
     }
     return [
       "",
       panelHeading("Help", width, color, "orange"),
-      `  ${key("r/R")} Refresh now   ${key("1")} Hour   ${key("2")} Today   ${key("3")} Week   ${key("Tab/Arrows")} Navigate`,
+      `  ${key("r/R")} Refresh now   ${key("1")} Hour   ${key("2")} Today   ${key("3")} Week   ${key("4")} Month   ${key("Tab/Arrows")} Navigate`,
       `  ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Toggle help`,
     ];
   }
   if (width < 50) {
-    return [` ${key("r")} ${key("1/2/3")} ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
+    return [` ${key("r")} ${key("1/2/3/4")} ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
   }
   if (width < 70) {
     // Keep footer under 50 chars so width=50 still truncates correctly
     if (width < 60) {
-      return [` ${key("r")} Refresh   ${key("1/2/3")} ${key("p")} Proj ${key("s")} Settings ${key("q")} Quit ${key("?")} Help`];
+      return [` ${key("r")} Refresh  ${key("1/2/3/4")} ${key("p")} Proj ${key("s")} ${key("q")} Quit ${key("?")} Help`];
     }
-    return [` ${key("r")} Refresh   ${key("1/2/3")} Periods   ${key("p")} Projects ${key("s")} Settings ${key("q")} Quit ${key("?")} Help`];
+    return [` ${key("r")} Refresh  ${key("1/2/3/4")} Periods  ${key("p")} Proj ${key("s")} ${key("q")} Quit ${key("?")} Help`];
+  }
+  if (width < 78) {
+    return [` ${key("r")} ${key("1")} Hour  ${key("2")} Today  ${key("3")} Week  ${key("4")} Month  ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
+  }
+  if (width < 90) {
+    return [` ${key("r")} ${key("1")} Hour  ${key("2")} Today  ${key("3")} Week  ${key("4")} Month  ${key("p")} Proj  ${key("s")} Settings  ${key("q")} Quit  ${key("?")} Help`];
+  }
+  if (width < 120) {
+    return [
+      ` ${key("r")} Refresh  ${key("1")} Hour  ${key("2")} Today  ${key("3")} Week  ${key("4")} Month  ${key("p")} Projects  ${key("s")} Settings  ${key("q")} Quit  ${key("?")} Help`,
+    ];
   }
   return [
     "",
-    ` ${key("r")} Refresh   ${key("1")} Hour   ${key("2")} Today   ${key("3")} Week   ${key("Tab/Arrows")} Navigate   ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Help`,
+    ` ${key("r")} Refresh   ${key("1")} Hour   ${key("2")} Today   ${key("3")} Week   ${key("4")} Month   ${key("Tab/Arrows")} Navigate   ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Help`,
   ];
+}
+
+/** Dashboard action triggered by clicking a footer token. */
+export type FooterClickAction =
+  | "refresh"
+  | "hour"
+  | "day"
+  | "week"
+  | "month"
+  | "projects"
+  | "settings"
+  | "quit"
+  | "help";
+
+/**
+ * Map a footer token (whitespace-delimited word under the cursor) to its
+ * dashboard action. Returns undefined for decorative tokens ("Periods",
+ * "Navigate", "1/2/3/4", …). Pure helper for mouse click handling.
+ */
+export function footerClickAction(token: string): FooterClickAction | undefined {
+  switch (token) {
+    case "r":
+    case "Refresh":
+      return "refresh";
+    case "1":
+    case "Hour":
+      return "hour";
+    case "2":
+    case "Today":
+      return "day";
+    case "3":
+    case "Week":
+      return "week";
+    case "4":
+    case "Month":
+      return "month";
+    case "p":
+    case "Proj":
+    case "Projects":
+      return "projects";
+    case "s":
+    case "Settings":
+      return "settings";
+    case "q":
+    case "Quit":
+      return "quit";
+    case "?":
+    case "Help":
+      return "help";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Find the whitespace-delimited token under 1-based column `cx` in an
+ * already ANSI-stripped line. Returns undefined when the column is blank.
+ */
+export function footerTokenAtX(line: string, cx: number): string | undefined {
+  const re = /\S+/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(line)) !== null) {
+    const start = match.index + 1;
+    if (cx >= start && cx < start + match[0].length) return match[0];
+  }
+  return undefined;
 }
 
 export function renderDashboard(
@@ -807,16 +940,19 @@ export function renderDashboard(
   options: DashboardRenderOptions = {},
 ): string {
   const snapshot = normalizeDashboardSnapshot(input);
-  // Keep a small floor for borders, but never force a 40-column frame on a
-  // narrower terminal. Content is truncated/stacked rather than relying on
-  // terminal wrapping to preserve redraw geometry.
-  const width = Math.max(20, options.width ?? 100);
+  // Reserve two columns on each side for a consistent application gutter.
+  // Content is rendered at the inner width so borders, tables, and overlays
+  // all share the same outer padding without relying on terminal wrapping.
+  const terminalWidth = Math.max(20, options.width ?? 100);
+  const width = Math.max(1, terminalWidth - APP_PADDING * 2);
   const color = colorEnabled(options);
   const selected = options.selectedWindow ?? "day";
   const lines = renderHeader(color, width);
-  const cardWidth = width >= WIDE_LAYOUT_MIN_WIDTH
-    ? Math.max(CARD_MIN_WIDTH, Math.floor((width - 4) / 3))
-    : Math.max(12, Math.min(CARD_MIN_WIDTH, width - 2));
+  const cardWidth = width >= FOUR_CARD_LAYOUT_MIN_WIDTH
+    ? Math.max(CARD_MIN_WIDTH, Math.floor((width - CARD_GAP * 3) / 4))
+    : width >= WIDE_LAYOUT_MIN_WIDTH
+      ? Math.max(CARD_MIN_WIDTH, Math.floor((width - CARD_GAP) / 2))
+      : Math.max(12, Math.min(CARD_MIN_WIDTH, width - 2));
   const cards = allWindowKinds().map((kind) => cardLines(
     kind,
     snapshot.windows[kind],
@@ -825,26 +961,32 @@ export function renderDashboard(
     selected === kind,
   ));
 
-  if (width >= WIDE_LAYOUT_MIN_WIDTH && cards.length === 3) {
+  if (width >= FOUR_CARD_LAYOUT_MIN_WIDTH) {
     lines.push(...composeCards(cards));
+  } else if (width >= WIDE_LAYOUT_MIN_WIDTH) {
+    for (let index = 0; index < cards.length; index += 2) {
+      lines.push(...composeCards(cards.slice(index, index + 2)));
+    }
   } else {
-    for (const card of cards) lines.push(...card, "");
-  }
-
-  // Below cards render unified provider stack - cards are unified totals, stack shows per-provider split with 3 accents
-  const stackProviders = snapshot.windows[selected]?.providers ?? snapshot.providers;
-  if (stackProviders.length > 0) {
-    lines.push("");
-    lines.push(...renderProviderStack(stackProviders, color, width));
+    for (const card of cards) lines.push(...card);
   }
 
   lines.push("");
   lines.push(...renderTrend(snapshot, selected, color, width));
   lines.push("");
   const selectedWindow = snapshot.windows[selected];
-  lines.push(...renderBreakdown(`Models · ${cardTitle(selected)}`, selectedWindow.models, color, width, "purple"));
-  lines.push(...renderBreakdown(`Providers · ${cardTitle(selected)}`, selectedWindow.providers, color, width, "orange"));
-  lines.push(...renderBreakdown(`Projects · ${cardTitle(selected)}`, selectedWindow.projects, color, width, "cyan"));
+  const breakdownWidths = breakdownColumnWidths([
+    ...selectedWindow.models,
+    ...selectedWindow.providers,
+    ...selectedWindow.projects,
+  ]);
+  lines.push(...renderBreakdown(`Models · ${cardTitle(selected)}`, selectedWindow.models, color, width, "purple", breakdownWidths));
+  if (options.settings?.showProvidersTable !== false) {
+    lines.push(...renderBreakdown(`Providers · ${cardTitle(selected)}`, selectedWindow.providers, color, width, "orange", breakdownWidths));
+  }
+  if (options.settings?.showProjectsTable !== false) {
+    lines.push(...renderBreakdown(`Projects · ${cardTitle(selected)}`, selectedWindow.projects, color, width, "cyan", breakdownWidths));
+  }
   if (snapshot.coverage.errors.length > 0) {
     lines.push("");
     lines.push(emphasis("Coverage errors", color));
@@ -854,7 +996,7 @@ export function renderDashboard(
       lines.push(`  ${label}${error.sessionID ? ` (${safeIdentifier(error.sessionID)})` : ""}`);
     }
   }
-  lines.push(renderStatusFooter(snapshot, color, width));
+  lines.push(...renderStatusBox(snapshot, color, width));
   lines.push(...renderFooter(options.help === true, color, width));
 
   if (options.settings?.visible === true) {
@@ -870,7 +1012,10 @@ export function renderDashboard(
   lines.push("");
   lines.push(renderCredit(width, color));
 
-  const content = lines.join("\n");
+  const outerPadding = " ".repeat(APP_PADDING);
+  const content = lines
+    .map((line) => `${outerPadding}${pad(truncateVisible(line, width), width)}${outerPadding}`)
+    .join("\n");
   return options.previousLineCount === undefined
     ? content
     : renderInPlace(content, options.previousLineCount, options as AnsiOptions);

@@ -13,6 +13,10 @@ export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
 export interface DashboardSettings {
   readonly enabledProviders: ReadonlyArray<ProviderKind>;
   readonly refreshIntervalSeconds: number;
+  /** Show the Providers breakdown table (default true for legacy files). */
+  readonly showProvidersTable?: boolean;
+  /** Show the Projects breakdown table (default true for legacy files). */
+  readonly showProjectsTable?: boolean;
 }
 
 export function clampRefreshIntervalSeconds(value: number): number {
@@ -98,12 +102,23 @@ export function normalizeEnabledProviders(value: unknown): ReadonlyArray<Provide
 
 export function normalizeSettings(value: unknown): DashboardSettings {
   if (typeof value !== "object" || value === null) {
-    return { enabledProviders: [...ALL_PROVIDER_KINDS], refreshIntervalSeconds: SETTINGS_DEFAULT_REFRESH_SECONDS };
+    return {
+      enabledProviders: [...ALL_PROVIDER_KINDS],
+      refreshIntervalSeconds: SETTINGS_DEFAULT_REFRESH_SECONDS,
+      showProvidersTable: true,
+      showProjectsTable: true,
+    };
   }
   const record = value as Record<string, unknown>;
   const enabled = normalizeEnabledProviders(record.enabledProviders ?? record.providers ?? record.filterProviders);
   const interval = normalizeRefreshIntervalSeconds(record.refreshIntervalSeconds as unknown);
-  return { enabledProviders: enabled, refreshIntervalSeconds: interval };
+  return {
+    enabledProviders: enabled,
+    refreshIntervalSeconds: interval,
+    // Missing (legacy settings.json) means shown.
+    showProvidersTable: record.showProvidersTable !== false,
+    showProjectsTable: record.showProjectsTable !== false,
+  };
 }
 
 export function settingsFilePath(cacheDirectory?: string): string {
@@ -154,6 +169,8 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
       version: 1,
       enabledProviders: [...settings.enabledProviders],
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settings.refreshIntervalSeconds),
+      showProvidersTable: settings.showProvidersTable !== false,
+      showProjectsTable: settings.showProjectsTable !== false,
     },
     null,
     2,

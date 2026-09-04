@@ -1,13 +1,13 @@
 import { DomainError } from "./errors.js";
 
-export const USAGE_WINDOW_KINDS = ["hour", "day", "week"] as const;
+export const USAGE_WINDOW_KINDS = ["hour", "day", "week", "month"] as const;
 export type UsageWindowKind = (typeof USAGE_WINDOW_KINDS)[number];
 
 export interface UsageWindowBase {
   /** Short stable key used by the CLI and JSON output. */
   readonly kind: UsageWindowKind;
   /** Human-readable semantics; the kind alone must not be interpreted as all-time. */
-  readonly semantics: "rolling-hour" | "local-day" | "iso-week";
+  readonly semantics: "rolling-hour" | "local-day" | "iso-week" | "rolling-month";
   /** The IANA time zone used for calendar labels and boundaries. */
   readonly timezone: string;
   /** Inclusive start and exclusive end instants. */
@@ -37,15 +37,22 @@ export interface ISOWeekWindow extends UsageWindowBase {
   readonly isoWeekLabel: string;
 }
 
+export interface RollingMonthWindow extends UsageWindowBase {
+  readonly kind: "month";
+  readonly semantics: "rolling-month";
+}
+
 export type UsageWindow =
   | RollingHourWindow
   | LocalDayWindow
-  | ISOWeekWindow;
+  | ISOWeekWindow
+  | RollingMonthWindow;
 
 export interface UsageWindowSet {
   readonly hour: RollingHourWindow;
   readonly day: LocalDayWindow;
   readonly week: ISOWeekWindow;
+  readonly month: RollingMonthWindow;
 }
 
 /** One half-open, timezone-aware interval used to plot a usage trend. */
@@ -59,8 +66,11 @@ type CivilDate = Readonly<{ year: number; month: number; day: number }>;
 type CivilDateTime = Readonly<CivilDate & { hour: number; minute: number; second: number }>;
 
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const FIVE_MINUTES_MS = 5 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const ISO_WEEK_DAYS = 7;
+const ROLLING_MONTH_DAYS = 30;
 
 function assertValidInstant(value: Date, name: string): void {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
@@ -123,7 +133,7 @@ function trendLabelFormatter(timezone: string, kind: UsageWindowKind): Intl.Date
   if (formatter === undefined) {
     formatter = new Intl.DateTimeFormat(
       "en-CA",
-      kind === "week"
+      kind === "week" || kind === "month"
         ? { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }
         : { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
     );
@@ -283,6 +293,11 @@ export function createUsageWindow(
   timezone: string,
 ): ISOWeekWindow;
 export function createUsageWindow(
+  kind: "month",
+  now: Date,
+  timezone: string,
+): RollingMonthWindow;
+export function createUsageWindow(
   kind: UsageWindowKind,
   now: Date,
   timezone: string,
@@ -305,6 +320,20 @@ export function createUsageWindow(
       from,
       to,
       label: "last 60 minutes",
+    };
+  }
+
+  if (kind === "month") {
+    const from = new Date(now.getTime() - ROLLING_MONTH_DAYS * DAY_MS);
+    const to = new Date(now.getTime());
+    assertWindowRange(from, to, kind);
+    return {
+      kind,
+      semantics: "rolling-month",
+      timezone,
+      from,
+      to,
+      label: "last 30 days",
     };
   }
 
@@ -346,7 +375,7 @@ export function createUsageWindow(
   };
 }
 
-/** Build all v1 windows from the same captured instant, avoiding boundary drift. */
+/** Build all dashboard windows from the same captured instant, avoiding boundary drift. */
 export function createUsageWindows(
   now: Date,
   timezone: string,
@@ -355,6 +384,7 @@ export function createUsageWindows(
     hour: createUsageWindow("hour", now, timezone),
     day: createUsageWindow("day", now, timezone),
     week: createUsageWindow("week", now, timezone),
+    month: createUsageWindow("month", now, timezone),
   };
 }
 
@@ -371,7 +401,7 @@ function trendBucketLabel(instant: Date, timezone: string, kind: UsageWindowKind
  * buckets advance in elapsed time from the local-day bounds, which preserves
  * both missing and repeated hours on DST transition days. Week buckets use
  * local midnights, so a DST day changes the bucket duration without changing
- * the seven-day shape of the ISO week.
+ * the seven-day shape of the ISO week. Rolling-month buckets use elapsed days.
  */
 export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBucket[] {
   assertTimeZone(window.timezone);
@@ -391,15 +421,15 @@ export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBuck
   };
 
   if (window.kind === "hour") {
-    const bucketDuration = 5 * 60 * 1_000;
+    const bucketDuration = MINUTE_MS;
     for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
       append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
     }
     return buckets;
   }
 
-  if (window.kind === "day") {
-    const bucketDuration = HOUR_MS;
+  if (window.kind === "day" || window.kind === "month") {
+    const bucketDuration = window.kind === "day" ? FIVE_MINUTES_MS : DAY_MS;
     for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
       append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
     }

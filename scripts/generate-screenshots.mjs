@@ -343,7 +343,7 @@ async function main() {
   // 2. Settings overlay
   const settingsText = renderDashboard(fixture, {
     isTTY: true, ansi: true, color: true, width: 100, now: NOW, selectedWindow: "day",
-    settings: { visible: true, enabledProviders: ["opencode", "codex", "antigravity"], refreshIntervalSeconds: 300, focusedIndex: 1 },
+    settings: { visible: true, enabledProviders: ["opencode", "codex", "antigravity"], refreshIntervalSeconds: 300, showProvidersTable: true, showProjectsTable: true, focusedIndex: 1 },
   });
   const settingsSvg = renderTextToSvg(settingsText, { widthCols: 100, title: "oc2token — settings (s)" });
   fs.writeFileSync(path.join(OUT_DIR, "dashboard-settings.svg"), settingsSvg);

@@ -244,8 +244,14 @@ function safeSnapshotValue(value: unknown, depth = 0): unknown {
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
-      fail("snapshot metadata number must be a safe integer");
+    // Breakdown costs are legitimate finite floats (e.g. $0.0003) and live
+    // inside the manifest snapshot. Rejecting every non-integer here failed
+    // every commit while costs were present. Only non-finite values (NaN,
+    // infinities — not exactly representable in JSON) still fail. The
+    // memory-exhaustion guards (depth, string length, array length) above
+    // are unaffected.
+    if (!Number.isFinite(value)) {
+      fail("snapshot metadata number must be finite");
     }
     return value;
   }

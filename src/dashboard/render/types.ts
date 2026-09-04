@@ -6,6 +6,7 @@ import type {
   UsageWindow,
   UsageWindowKind,
 } from "../../domain/index.js";
+import { USAGE_WINDOW_KINDS } from "../../domain/index.js";
 import {
   costForTokens,
   estimatedCost,
@@ -79,6 +80,10 @@ export interface DashboardSettingsView {
   readonly enabledProviders: ReadonlyArray<string>;
   readonly refreshIntervalSeconds: number;
   readonly focusedIndex: number;
+  /** Show the Providers breakdown table. Undefined (legacy) means shown. */
+  readonly showProvidersTable?: boolean;
+  /** Show the Projects breakdown table. Undefined (legacy) means shown. */
+  readonly showProjectsTable?: boolean;
 }
 
 export interface DashboardProjectsView {
@@ -105,7 +110,7 @@ export interface OutputOptions extends DashboardRenderOptions {
 
 type UnknownRecord = Record<string, unknown>;
 
-const WINDOW_KINDS = ["hour", "day", "week"] as const;
+const WINDOW_KINDS = USAGE_WINDOW_KINDS;
 const COMPONENTS = ["input", "output", "reasoning", "cacheRead", "cacheWrite"] as const;
 
 /**
@@ -210,15 +215,15 @@ function dateForWindow(value: unknown, fallback: Date): Date {
 
 function fallbackWindow(kind: UsageWindowKind, timezone: string): UsageWindow {
   const now = new Date(0);
-  const from = new Date(kind === "hour" ? -60 * 60 * 1000 : 0);
-  const to = kind === "hour" ? now : new Date(60 * 60 * 1000);
+  const from = new Date(kind === "hour" ? -60 * 60 * 1000 : kind === "month" ? -30 * 24 * 60 * 60 * 1000 : 0);
+  const to = kind === "hour" || kind === "month" ? now : new Date(60 * 60 * 1000);
   return {
     kind,
-    semantics: kind === "hour" ? "rolling-hour" : kind === "day" ? "local-day" : "iso-week",
+    semantics: kind === "hour" ? "rolling-hour" : kind === "day" ? "local-day" : kind === "week" ? "iso-week" : "rolling-month",
     timezone,
     from,
     to,
-    label: kind === "hour" ? "last 60 minutes" : kind === "day" ? "today" : "this week",
+    label: kind === "hour" ? "last 60 minutes" : kind === "day" ? "today" : kind === "week" ? "this week" : "last 30 days",
     ...(kind === "day" ? { localDate: "1970-01-01" } : {}),
     ...(kind === "week" ? { isoWeekYear: 1970, isoWeek: 1, isoWeekLabel: "1970-W01" } : {}),
   } as UsageWindow;
@@ -255,7 +260,7 @@ function normalizeWindow(kind: UsageWindowKind, value: unknown, timezone: string
       isoWeekLabel: asString(source.isoWeekLabel, asString(source.label, "1970-W01")),
     } as UsageWindow;
   }
-  return { ...common, kind, semantics: "rolling-hour" } as UsageWindow;
+  return { ...common, kind, semantics: kind === "month" ? "rolling-month" : "rolling-hour" } as UsageWindow;
 }
 
 function normalizeTrend(value: unknown): TrendBucket | null {
@@ -375,7 +380,7 @@ function sourceAndVersion(root: UnknownRecord): { source: string; version: strin
 
 function bucketLabel(date: Date, timezone: string, kind: UsageWindowKind): string {
   try {
-    return new Intl.DateTimeFormat("en-CA", kind === "week"
+    return new Intl.DateTimeFormat("en-CA", kind === "week" || kind === "month"
       ? { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }
       : { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
     ).format(date);
@@ -392,11 +397,12 @@ function deriveTrends(
   if (!Array.isArray(root.records)) return [];
   const duration = window.to.getTime() - window.from.getTime();
   const bucketDuration = kind === "hour"
-    ? 5 * 60 * 1000
+    ? 60 * 1000
     : kind === "day"
-      ? 60 * 60 * 1000
+      ? 5 * 60 * 1000
       : 24 * 60 * 60 * 1000;
-  const bucketCount = Math.max(1, Math.min(24, Math.ceil(duration / bucketDuration)));
+  const maxBucketCount = kind === "hour" ? 60 : kind === "day" ? 288 : 30;
+  const bucketCount = Math.max(1, Math.min(maxBucketCount, Math.ceil(duration / bucketDuration)));
   const values = Array.from({ length: bucketCount }, (_, index) => {
     const from = new Date(window.from.getTime() + index * bucketDuration);
     const to = new Date(Math.min(window.to.getTime(), from.getTime() + bucketDuration));

@@ -146,7 +146,7 @@ function serializeBreakdown(value: BreakdownTotal): SerializedBreakdown {
 }
 
 /**
- * Build a stable metadata-first JSON contract. All three exact windows are
+ * Build a stable metadata-first JSON contract. All four exact windows are
  * emitted, even when the terminal view currently focuses on one period.
  */
 export function toJSONSnapshot(input: DashboardSnapshotInput): StableJSONSnapshot {

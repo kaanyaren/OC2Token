@@ -138,9 +138,9 @@ export function formatTokenBreakdown(totals: {
   const cache = totals.cacheRead + totals.cacheWrite;
   const out = totals.output + totals.reasoning;
   return [
-    `I ${formatTokenCount(totals.input)}`,
-    `O ${formatTokenCount(out)}`,
-    `C ${formatTokenCount(cache)}`,
+    `IN ${formatTokenCount(totals.input)}`,
+    `OUT ${formatTokenCount(out)}`,
+    `CACHE ${formatTokenCount(cache)}`,
   ].join("    ");
 }
 

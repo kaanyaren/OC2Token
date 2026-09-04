@@ -5,6 +5,7 @@ import {
   type CollectionResult,
   type Coverage,
   type OpenCodeProject,
+  type OpenCodeSessionStats,
   type OpenCodeTransport,
   type UsageBreakdown,
   type UsageSource,
@@ -17,6 +18,7 @@ import {
 } from "../domain/index.js";
 import type { StatsRequestOptions } from "./transport.js";
 import { isStatsRangeMismatch } from "./transport.js";
+import { costForTokens, pricingForModel } from "../pricing/pricing.js";
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new DomainError("cancelled", "The operation was cancelled");
@@ -35,6 +37,45 @@ const completeStatsCoverage: Coverage = {
 
 const TREND_WORKERS = 4;
 const PROJECT_WORKERS = 4;
+
+function estimatedBreakdownCost(
+  breakdowns: ReadonlyArray<UsageBreakdown> | undefined,
+): number | undefined {
+  if (breakdowns === undefined) return undefined;
+  let total = 0;
+  let priced = 0;
+  for (const breakdown of breakdowns) {
+    const cost = breakdown.cost ?? (() => {
+      const pricing = pricingForModel(breakdown.name);
+      return pricing === undefined ? undefined : costForTokens(breakdown.totals, pricing);
+    })();
+    if (cost === undefined) continue;
+    total += cost;
+    priced += 1;
+  }
+  return priced === 0 ? undefined : Math.round(total * 1_000_000) / 1_000_000;
+}
+
+function withStatsBreakdownCosts(
+  result: OpenCodeSessionStats,
+): { models?: ReadonlyArray<UsageBreakdown>; providers?: ReadonlyArray<UsageBreakdown> } {
+  const models = result.models?.map((model) => {
+    if (model.cost !== undefined) return model;
+    const cost = estimatedBreakdownCost([model]);
+    return cost === undefined ? model : { ...model, cost };
+  });
+  const providerCosts = new Map<string, number>();
+  for (const model of models ?? []) {
+    if (model.provider === undefined || model.cost === undefined) continue;
+    providerCosts.set(model.provider, (providerCosts.get(model.provider) ?? 0) + model.cost);
+  }
+  const providers = result.providers?.map((provider) => {
+    if (provider.cost !== undefined) return provider;
+    const cost = providerCosts.get(provider.name);
+    return cost === undefined ? provider : { ...provider, cost: Math.round(cost * 1_000_000) / 1_000_000 };
+  });
+  return { models, providers };
+}
 
 async function collectProjectBreakdowns(
   transport: OpenCodeTransport,
@@ -56,7 +97,12 @@ async function collectProjectBreakdowns(
       try {
         const result = await transport.getSessionStats(window, { project: project.id, signal });
         if (result.totals.recorded_total > 0) {
-          results[index] = { name: project.canonical, totals: result.totals };
+          const cost = estimatedBreakdownCost(result.models);
+          results[index] = {
+            name: project.canonical,
+            totals: result.totals,
+            ...(cost === undefined ? {} : { cost }),
+          };
         }
       } catch (error) {
         if (isCancellationError(error) || (error instanceof DomainError && error.code === "cancelled")) {
@@ -182,17 +228,18 @@ export class OpenCodeStatsSource implements UsageSource {
         signal: request.signal,
       };
       const result = await this.transport.getSessionStats(window, options);
+      const enriched = withStatsBreakdownCosts(result);
       totalsByWindow[window.kind] = result.totals;
       // Keep the widest requested window's breakdown for backwards-compatible
       // global fields, while also retaining each response for the selected
       // dashboard period.
-      if (result.models !== undefined) {
-        models = result.models;
-        modelsByWindow[window.kind] = result.models;
+      if (enriched.models !== undefined) {
+        models = enriched.models;
+        modelsByWindow[window.kind] = enriched.models;
       }
-      if (result.providers !== undefined) {
-        providers = result.providers;
-        providersByWindow[window.kind] = result.providers;
+      if (enriched.providers !== undefined) {
+        providers = enriched.providers;
+        providersByWindow[window.kind] = enriched.providers;
       }
       trendsByWindow[window.kind] = await collectTrendBuckets(this.transport, window, options);
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/screenshots/dashboard.svg" width="100%" alt="OC2Token dashboard — day view with three window cards, trend sparkline and breakdown tables" />
+  <img src="assets/screenshots/dashboard.svg" width="100%" alt="OC2Token dashboard — day view with four window cards, trend sparkline and breakdown tables" />
 </p>
 
 <h1 align="center">OC2Token</h1>
@@ -28,7 +28,7 @@
 OpenCode 2 records rich token telemetry locally, but the raw message stream is noisy and per-provider. **OC2Token** is a single, fast, terminal-native console that:
 
 - aggregates **all three providers** (`opencode`, `codex`, `antigravity`) into one unified report
-- shows three exact windows — **last 60 minutes · today · this week** — with local-day and ISO-week semantics
+- shows four exact windows — **last 60 minutes · today · this week · last month** (a rolling 30 days) — with local-day and ISO-week semantics
 - visualises a **sparkline trend**, per-model / per-provider / per-project breakdowns, and coverage status without ever persisting prompts or keys
 - stays instantly usable over pipes (`--json`, `--format table`) for CI and scripting
 
@@ -39,7 +39,7 @@ OpenCode 2 records rich token telemetry locally, but the raw message stream is n
 ## ✨ Highlights
 
 - **Unified multi-provider** — one snapshot, one schema, three colours (purple · orange · cyan)
-- **Three exact windows** rendered side-by-side, responsive down to 20 columns
+- **Four exact windows** rendered responsively, from one row down to 20-column terminals
 - **CodeBurn-inspired palette** — violet structure, orange focus, cyan inputs; `--no-color` / `NO_COLOR` safe
 - **Trend sparkline** per window, not one row per bucket
 - **Privacy by design** — only normalized token counters are cached; no prompts, tool inputs, or session titles are stored
@@ -55,7 +55,7 @@ OpenCode 2 records rich token telemetry locally, but the raw message stream is n
 <td width="50%">
 
 **Dashboard — day (100 cols)**
-<br/>Three cards + inline provider stack + trend
+<br/>Four cards + inline provider stack + trend
 
 <img src="assets/screenshots/dashboard.svg" alt="Dashboard day view" />
 
@@ -155,13 +155,13 @@ oc2token --no-color     # or NO_COLOR=1 for plain output
 
 | Key / Click | Action |
 |-------------|--------|
-| `r` / `R` | Refresh now |
-| `1` / `2` / `3` · **click top card** | Select **hour · day · week** |
+| `r` / `R` · **click Refresh** | Refresh now |
+| `1` / `2` / `3` / `4` · **click top card, digit, or period name** | Select **hour · day · week · month** |
 | `Tab` / `←` `→` / `↑` `↓` | Cycle windows |
-| `p` | Projects panel |
-| `s` | Settings — toggle providers, adjust refresh |
-| `?` | Help |
-| `q` / `Ctrl+C` | Quit |
+| `p` · **click Projects** | Projects panel (click again to close) |
+| `s` · **click Settings, a provider row, a table row, or the refresh slider** | Settings — toggle providers, show/hide Providers & Projects tables, adjust refresh |
+| `?` · **click Help** | Help |
+| `q` / `Ctrl+C` · **click Quit** | Quit |
 
 Settings persist under the cache directory (`~/Library/Caches/oc2token` on macOS by default; `$XDG_CACHE_HOME/oc2token` when `XDG_CACHE_HOME` is set, otherwise `~/Library/Caches/oc2token` — see `src/application.ts:47-50`). Override with `--cache-dir`. At least one provider must stay enabled.
 
@@ -265,17 +265,17 @@ oc2token --json | jq .
 oc2token --once --json > snapshot.json
 ```
 
-Emits **all three windows**, `costs`, `totalsByProvider`/`totalsByProject`, `trends`, and coverage in one stable contract:
+Emits **all four windows**, `costs`, `totalsByProvider`/`totalsByProject`, `trends`, and coverage in one stable contract:
 
 ```json
 {
   "schemaVersion": 4,
   "source": "unified",
   "version": "0.1.4",
-  "windows": { "hour": { "kind": "hour", "from": "…", "to": "…", "label": "last 60 minutes" }, "day": {}, "week": {} },
-  "totals": { "hour": { "recorded_total": 15582 }, "day": {}, "week": {} },
-  "costs": { "hour": 0.042, "day": null, "week": null },
-  "trends": { "hour": [{ "label": "…", "totals": {}, "from": "…", "to": "…" }], "day": [], "week": [] },
+  "windows": { "hour": { "kind": "hour", "from": "…", "to": "…", "label": "last 60 minutes" }, "day": {}, "week": {}, "month": {} },
+  "totals": { "hour": { "recorded_total": 15582 }, "day": {}, "week": {}, "month": {} },
+  "costs": { "hour": 0.042, "day": null, "week": null, "month": null },
+  "trends": { "hour": [{ "label": "…", "totals": {}, "from": "…", "to": "…" }], "day": [], "week": [], "month": [] },
   "providersByWindow": { "day": [ { "name": "opencode", "totals": {}, "cost": 0.01 } ] },
   "totalsByProvider": { "day": { "opencode": { "recorded_total": 21785 } } },
   "totalsByProject": { "day": { "/Users/you/project": { "recorded_total": 9001 } } },

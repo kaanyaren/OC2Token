@@ -21,6 +21,10 @@ export const ANSI = Object.freeze({
   yellow: "\u001b[33m",
   red: "\u001b[31m",
   white: "\u001b[37m",
+  whiteBright: "\u001b[97m",
+  // Zebra striping for breakdown tables (color mode only): subtle dark-gray
+  // row background. Assumes a dark terminal like the rest of this theme.
+  bgZebra: "\u001b[48;5;236m",
   clearLine: "\u001b[2K",
   cursorHome: "\u001b[H",
   cursorHide: "\u001b[?25l",
@@ -102,6 +106,22 @@ export function themeCost(value: string, enabled: boolean): string {
 
 export function themeYellow(value: string, enabled: boolean): string {
   return paint(value, ANSI.yellow, enabled);
+}
+
+export function themeWhite(value: string, enabled: boolean, bright = false): string {
+  return paint(value, bright ? ANSI.whiteBright : ANSI.white, enabled);
+}
+
+/**
+ * Wrap a fully-composed row line with the zebra background. Inner segments
+ * each end with a reset that would clear the background, so re-emit it after
+ * every reset. Zero-width for layout: stripAnsi removes these escapes, so
+ * pad()/lineWidth() results are unaffected. Gated on color — plain output
+ * never receives background escapes.
+ */
+export function zebraRow(value: string, striped: boolean, enabled: boolean): string {
+  if (!enabled || !striped) return value;
+  return ANSI.bgZebra + value.split(ANSI.reset).join(ANSI.reset + ANSI.bgZebra) + ANSI.reset;
 }
 
 export function statusColor(
