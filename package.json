@@ -39,7 +39,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@opencode-ai/client": "0.0.0-beta-18866"
+    "@opencode-ai/client": "0.0.0-beta-18866",
+    "oc2token": "^0.1.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

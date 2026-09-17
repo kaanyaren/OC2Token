@@ -604,7 +604,10 @@ export class OpenCode2Transport implements OpenCodeTransport {
       (signal) => this.client.health.get({ signal }),
       { ...this.retryPolicy, signal: options.signal },
     );
-    if (!isRecord(raw) || raw.healthy !== true || typeof raw.version !== "string") {
+    if (!isRecord(raw) || typeof raw.version !== "string") {
+      throw new DomainError("invalid-data", "OpenCode health response is malformed");
+    }
+    if ("healthy" in raw && raw.healthy !== undefined && raw.healthy !== true) {
       throw new DomainError("invalid-data", "OpenCode health response is malformed");
     }
     // Unified fingerprint format with connectOpenCode (see fingerprintForHealth):

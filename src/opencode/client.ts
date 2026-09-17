@@ -7,6 +7,7 @@ import {
   type EnsureOptions,
 } from "@opencode-ai/client/service";
 import { OpenCode } from "@opencode-ai/client";
+import { createNativeClient, discoverNativeEndpoint } from "./native.js";
 import type { OpenCodeHealth } from "../domain/index.js";
 import { DomainError, cancellationError } from "../domain/index.js";
 
@@ -67,7 +68,11 @@ export function createOpenCodeClient(
 }
 
 export const defaultClientFactory: OpenCodeClientFactory = (endpoint, options) =>
-  createOpenCodeClient(endpoint, defaultService, options);
+  createNativeClient(endpoint, options);
+
+export function nativeClientFactory(endpoint: Endpoint, options: OpenCodeClientFactoryOptions = {}): OpenCodeClientLike {
+  return createNativeClient(endpoint, options);
+}
 
 export interface ConnectionOptions {
   readonly service?: ServiceLifecycle;
@@ -123,7 +128,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readHealth(value: unknown, endpoint: Endpoint): OpenCodeHealth {
-  if (!isRecord(value) || value.healthy !== true || typeof value.version !== "string") {
+  if (!isRecord(value) || typeof value.version !== "string") {
+    throw new DomainError(
+      "invalid-data",
+      "OpenCode health response is missing a version",
+    );
+  }
+  // Servers before 2.0.6 report `{ healthy: true, version, pid }` from
+  // `/api/health`. Servers at 2.0.6+ report `{ version, pid, urls, paths }`
+  // from `/api/info` with no healthy flag. Accept both; a present healthy
+  // flag must still be true so a degraded payload is not mistaken for ready.
+  if ("healthy" in value && value.healthy !== undefined && value.healthy !== true) {
     throw new DomainError(
       "invalid-data",
       "OpenCode health response is missing healthy=true and a version",
@@ -191,17 +206,35 @@ export async function connectOpenCode(options: ConnectionOptions = {}): Promise<
   let endpoint = await service.discover(mergeDiscoveryOptions(options));
   throwIfAborted(signal);
 
+  // The generated client's discover probes `/api/health`, which server 2.0.6
+  // removed (replaced by `/api/info`). When it reports nothing, probe the
+  // registration file directly before giving up or spawning a new service.
+  if (endpoint === undefined && options.service === undefined) {
+    try {
+      endpoint = await discoverNativeEndpoint({
+        ...mergeDiscoveryOptions(options),
+        fetch: options.fetch,
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch {
+      endpoint = undefined;
+    }
+    throwIfAborted(signal);
+  }
+
   if (endpoint === undefined) {
     if (options.ensure === false) {
       throw new DomainError("transport", "No healthy OpenCode 2 service was discovered");
     }
     endpoint = await service.ensure(mergeEnsureOptions(options));
     throwIfAborted(signal);
+    // A freshly ensured 2.0.6 service still has no `/api/health`, so the
+    // endpoint returned by ensure is used directly without re-probing.
   }
 
   const normalizedEndpoint = assertEndpoint(endpoint);
   const client = options.client ?? (options.clientFactory ?? ((target, factoryOptions) =>
-    createOpenCodeClient(target, service, factoryOptions)))(normalizedEndpoint, {
+    createNativeClient(target, factoryOptions)))(normalizedEndpoint, {
     fetch: options.fetch,
   });
 
@@ -209,7 +242,21 @@ export async function connectOpenCode(options: ConnectionOptions = {}): Promise<
     throw new DomainError("invalid-data", "OpenCode client does not expose health.get");
   }
 
-  const health = parseOpenCodeHealth(await client.health.get({ signal }), normalizedEndpoint);
+  let rawHealth: unknown;
+  try {
+    rawHealth = await client.health.get({ signal });
+  } catch (error) {
+    // An injected legacy generated client hits the removed `/api/health` and
+    // fails with 404 against a 2.0.6 server. Retry once over the native
+    // routes instead of reporting the service as undiscoverable.
+    if (options.client === undefined || options.service !== undefined) throw error;
+    const native = createNativeClient(normalizedEndpoint, { fetch: options.fetch });
+    rawHealth = await native.health.get({ signal });
+    const health = parseOpenCodeHealth(rawHealth, normalizedEndpoint);
+    throwIfAborted(signal);
+    return { endpoint: normalizedEndpoint, client: native, health };
+  }
+  const health = parseOpenCodeHealth(rawHealth, normalizedEndpoint);
   throwIfAborted(signal);
   return { endpoint: normalizedEndpoint, client, health };
 }
