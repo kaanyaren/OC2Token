@@ -850,3 +850,23 @@ test("settings panel lists the four card slots", () => {
   assert.match(plain, /Card 1: 15m/);
   assert.match(plain, /Card 4: Week/);
 });
+
+test("top cards show exact token counts with a tokens suffix when it fits", () => {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const totals = toUsageTotals({ input: 1000000000, output: 100000000, reasoning: 32234235, cacheRead: 0, cacheWrite: 0 });
+  const input: Record<string, unknown> = {
+    capturedAt: NOW,
+    windows,
+    source: "message-scan",
+    records: [],
+    totalsByWindow: { hour: totals, day: totals, week: totals, month: totals },
+    coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  // Wide cards fit the exact count plus suffix: 1,000,000,000 + 100,000,000 + 32,234,235.
+  const wide = renderDashboard(input, { isTTY: false, color: false, width: 200, selectedWindow: "day" });
+  assert.match(wide, /1,132,234,235 tokens/);
+  // Narrow cards fall back to the compact form to preserve the border.
+  const narrow = renderDashboard(input, { isTTY: false, color: false, width: 20, selectedWindow: "day" });
+  assert.match(narrow, /1\.1B/);
+  assert.doesNotMatch(narrow, /1,132,234,235/);
+});

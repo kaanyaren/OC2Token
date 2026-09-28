@@ -26,6 +26,7 @@ import {
   DASHBOARD_ROW_CAP,
   formatCoverage,
   formatCost,
+  formatExactTokenCount,
   formatStatusFooter,
   formatTokenBreakdown,
   formatTokenCount,
@@ -195,9 +196,23 @@ function cardLines(
   const borderColor = selected ? ANSI.orange : ANSI.purpleDeep;
   const totalLabel = inner < 15 ? "Total" : "Recorded";
   // Unmeasured derived ranges show n/a, never a zero that reads as measured.
-  const totalValue = window.unmeasured === true
-    ? "n/a"
-    : formatTokenCount(window.totals.recorded_total);
+  // Otherwise the card shows the exact count ("1,132,234,235"), with a
+  // "tokens" suffix when it fits and a compact fallback ("1.1B") on cards too
+  // narrow for the full number — padding never truncates, so an overflowing
+  // value would break the card border.
+  let totalValue: string;
+  if (window.unmeasured === true) {
+    totalValue = "n/a";
+  } else {
+    const exact = formatExactTokenCount(window.totals.recorded_total);
+    if (lineWidth(`${totalLabel}  ${exact} tokens`) <= inner) {
+      totalValue = `${exact} tokens`;
+    } else if (lineWidth(`${totalLabel}  ${exact}`) <= inner) {
+      totalValue = exact;
+    } else {
+      totalValue = formatTokenCount(window.totals.recorded_total);
+    }
+  }
   const total = `${themePurple(totalLabel, color, true)}  ${themeOrange(totalValue, color, true)}`;
   const first = pad(total, inner);
   const rawComponents = window.unmeasured === true
