@@ -701,8 +701,9 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       openGithubPage();
       return;
     }
-    // Breakdown table headers toggle collapse. Left-click (0) and right-click (2)
-    // both toggle; other buttons are ignored. Only when no panel is open.
+    // Breakdown table headers and their "+N more · click to expand" hints toggle
+    // collapse. Left-click (0) and right-click (2) both toggle; other buttons are
+    // ignored. Only when no panel is open.
     if (!settingsState.visible && !projectsVisible && (button === 0 || button === 2) && clickedLine !== undefined) {
       const tableMatch = clickedLine.match(/Models ·|Providers ·|Projects ·/);
       if (tableMatch !== null) {
@@ -710,6 +711,21 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         collapsedTables[key] = !collapsedTables[key];
         draw();
         return;
+      }
+      // The "+N more · click to expand" / "click to collapse" hint has no table
+      // name, so find the nearest preceding table header in the frame.
+      if (clickedLine.includes("click to expand") || clickedLine.includes("click to collapse")) {
+        for (let row = cy - 2; row >= 0; row -= 1) {
+          const headerLine = frameLines[row];
+          if (headerLine === undefined) break;
+          const headerMatch = headerLine.match(/Models ·|Providers ·|Projects ·/);
+          if (headerMatch !== null) {
+            const key = headerMatch[0].split(" ")[0]!.toLowerCase() as "models" | "providers" | "projects";
+            collapsedTables[key] = !collapsedTables[key];
+            draw();
+            return;
+          }
+        }
       }
     }
     // Footer tokens (below the Status line, skipping panels and credit).
