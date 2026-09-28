@@ -158,7 +158,7 @@ oc2token --no-color     # or NO_COLOR=1 for plain output
 | `r` / `R` · **click Refresh** | Refresh now |
 | `1` / `2` / `3` / `4` · **click top card, digit, or period name** | Select **hour · day · week · month** |
 | `Tab` / `←` `→` / `↑` `↓` | Cycle windows (or breakdown tables when Settings is closed) |
-| `Space` · **click a table header** | Expand/collapse a breakdown table |
+| `Space` · **left/right-click a table header** | Expand/collapse a breakdown table |
 | `p` · **click Projects** | Projects panel (click again to close) |
 | `s` · **click Settings, a provider row, a table row, or the refresh slider** | Settings — toggle providers, show/hide Providers & Projects tables, adjust refresh |
 | `?` · **click Help** | Help |
@@ -168,7 +168,7 @@ Settings persist under the cache directory (`~/Library/Caches/oc2token` on macOS
 
 **Theme.** Purple carries structure, orange carries activity and focus, cyan carries inputs. Respects `NO_COLOR` and `--no-color`.
 
-**Collapsible tables.** Breakdown tables with more than 3 rows start collapsed, showing the top 3 plus a `+N more · click to expand` hint. Click the table header (or `Tab` to focus a table, then `Space`) to expand/collapse. Collapse state resets to collapsed on each refresh.
+**Collapsible tables.** Breakdown tables with more than 3 rows start collapsed, showing the top 3 plus a `+N more · click to expand` hint. Left-click or right-click the table header (or `Tab` to focus a table, then `Space`) to expand/collapse. Collapse state resets to collapsed on each refresh.
 
 ---
 

@@ -638,7 +638,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
    * keyboard actions: footer tokens act like their keys, settings rows toggle
    * providers / scrub the refresh slider, and top cards select the period.
    */
-  const handleClick = (cx: number, cy: number): void => {
+  const handleClick = (cx: number, cy: number, button = 0): void => {
     // Settings panel rows capture their own clicks while open.
     if (settingsState.visible) {
       const line = frameLines[cy - 1];
@@ -701,8 +701,9 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       openGithubPage();
       return;
     }
-    // Breakdown table headers toggle collapse. Only when no panel is open.
-    if (!settingsState.visible && !projectsVisible && clickedLine !== undefined) {
+    // Breakdown table headers toggle collapse. Left-click (0) and right-click (2)
+    // both toggle; other buttons are ignored. Only when no panel is open.
+    if (!settingsState.visible && !projectsVisible && (button === 0 || button === 2) && clickedLine !== undefined) {
       const tableMatch = clickedLine.match(/Models ·|Providers ·|Projects ·/);
       if (tableMatch !== null) {
         const key = tableMatch[0].split(" ")[0]!.toLowerCase() as "models" | "providers" | "projects";
@@ -836,8 +837,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const cb = Number(parts[0]);
           const cx = Number(parts[1]);
           const cy = Number(parts[2]);
-          if (Number.isFinite(cb) && Number.isFinite(cx) && Number.isFinite(cy) && cb === 0) {
-            handleClick(cx, cy);
+          if (Number.isFinite(cb) && Number.isFinite(cx) && Number.isFinite(cy) && (cb === 0 || cb === 2)) {
+            handleClick(cx, cy, cb);
           }
         }
         i = end + 1;
