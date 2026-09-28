@@ -14,41 +14,41 @@
 <rect x="24" y="58" width="740" height="588" rx="8" fill="#15101f"/>
 <text font-family="'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace" font-size="12" line-height="16" xml:space="preserve">
 <tspan x="42" y="84" fill="#d9d2f0">OpenCode 2 Token Usage</tspan>
-<tspan x="42" y="100" fill="#d9d2f0">Source: unified  Version: 0.1.0</tspan>
+<tspan x="42" y="100" fill="#d9d2f0">Source: unified  Version: 0.1.4</tspan>
 <tspan x="42" y="116" fill="#d9d2f0">Status: COMPLETE  Coverage: COMPLETE · 14/14 sessions</tspan>
 <tspan x="42" y="132" fill="#e6e2ff"> </tspan>
-<tspan x="42" y="148" fill="#d9d2f0">Window     Recorded  In      Out     Cache</tspan>
-<tspan x="42" y="164" fill="#d9d2f0">------     --------  --      ---     -----</tspan>
-<tspan x="42" y="180" fill="#d9d2f0">Last hour  15,582    10,560  3,452   1,570</tspan>
-<tspan x="42" y="196" fill="#d9d2f0">Today      45,752    31,060  9,997   4,695</tspan>
-<tspan x="42" y="212" fill="#d9d2f0">This week  76,542    52,260  16,427  7,855</tspan>
-<tspan x="42" y="228" fill="#e6e2ff"> </tspan>
-<tspan x="42" y="244" fill="#d9d2f0">Models</tspan>
-<tspan x="42" y="260" fill="#d9d2f0">Name                       Recorded  In      Out    Cache</tspan>
-<tspan x="42" y="276" fill="#d9d2f0">-------------------------  --------  ------  -----  -----</tspan>
-<tspan x="42" y="292" fill="#d9d2f0">openai/gpt-5-codex         19,278    13,800  3,918  1,560</tspan>
-<tspan x="42" y="308" fill="#d9d2f0">openai/gpt-5               18,770    12,400  4,050  2,320</tspan>
-<tspan x="42" y="324" fill="#d9d2f0">anthropic/claude-4-opus    18,420    12,400  3,920  2,100</tspan>
-<tspan x="42" y="340" fill="#d9d2f0">anthropic/claude-4-sonnet  12,280    8,500   3,090  690  </tspan>
-<tspan x="42" y="356" fill="#d9d2f0">google/gemini-3-flash      3,185     2,100   605    480  </tspan>
-<tspan x="42" y="372" fill="#d9d2f0">openai/gpt-4o              2,285     1,600   450    235  </tspan>
-<tspan x="42" y="388" fill="#d9d2f0">google/gemini-3-pro        1,594     940     254    400  </tspan>
-<tspan x="42" y="404" fill="#d9d2f0">openai/gpt-5-mini          730       520     140    70   </tspan>
-<tspan x="42" y="420" fill="#e6e2ff"> </tspan>
-<tspan x="42" y="436" fill="#d9d2f0">Providers</tspan>
-<tspan x="42" y="452" fill="#d9d2f0">Name         Recorded  In      Out    Cache</tspan>
-<tspan x="42" y="468" fill="#d9d2f0">-----------  --------  ------  -----  -----</tspan>
-<tspan x="42" y="484" fill="#d9d2f0">anthropic    30,700    20,900  7,010  2,790</tspan>
-<tspan x="42" y="500" fill="#d9d2f0">openai       21,785    14,520  4,640  2,625</tspan>
-<tspan x="42" y="516" fill="#d9d2f0">codex        19,278    13,800  3,918  1,560</tspan>
-<tspan x="42" y="532" fill="#d9d2f0">antigravity  4,779     3,040   859    880  </tspan>
+<tspan x="42" y="148" fill="#d9d2f0">Window      Recorded      In     Out  Cache   Cost</tspan>
+<tspan x="42" y="164" fill="#d9d2f0">------      --------      --     ---  -----   ----</tspan>
+<tspan x="42" y="180" fill="#d9d2f0">Last hour     15,582  10,560   3,452  1,570  $0.06</tspan>
+<tspan x="42" y="196" fill="#d9d2f0">Today         45,752  31,060   9,997  4,695  $0.17</tspan>
+<tspan x="42" y="212" fill="#d9d2f0">This week     76,542  52,260  16,427  7,855  $0.37</tspan>
+<tspan x="42" y="228" fill="#d9d2f0">Last month         0       0       0      0  $0.42</tspan>
+<tspan x="42" y="244" fill="#e6e2ff"> </tspan>
+<tspan x="42" y="260" fill="#d9d2f0">Models</tspan>
+<tspan x="42" y="276" fill="#d9d2f0">Name                                                              Recorded      In     Out  Cache     Cost</tspan>
+<tspan x="42" y="292" fill="#d9d2f0">----------------------------------------------------------------  --------  ------  ------  -----  -------</tspan>
+<tspan x="42" y="308" fill="#d9d2f0">openai/gpt-5-codex                                                  19,278  13,800   3,918  1,560    $0.06</tspan>
+<tspan x="42" y="324" fill="#d9d2f0">openai/gpt-5                                                        18,770  12,400   4,050  2,320    $0.06</tspan>
+<tspan x="42" y="340" fill="#d9d2f0">anthropic/claude-4-opus                                             18,420  12,400   3,920  2,100    $0.16</tspan>
+<tspan x="42" y="356" fill="#d9d2f0">anthropic/claude-4-sonnet                                           12,280   8,500   3,090    690    $0.07</tspan>
+<tspan x="42" y="372" fill="#d9d2f0">google/gemini-3-flash                                                3,185   2,100     605    480  $0.0039</tspan>
+<tspan x="42" y="388" fill="#d9d2f0">openai/gpt-4o                                                        2,285   1,600     450    235  $0.0088</tspan>
+<tspan x="42" y="404" fill="#d9d2f0">google/gemini-3-pro                                                  1,594     940     254    400  $0.0052</tspan>
+<tspan x="42" y="420" fill="#d9d2f0">openai/gpt-5-mini                                                      730     520     140     70  $0.0004</tspan>
+<tspan x="42" y="436" fill="#e6e2ff"> </tspan>
+<tspan x="42" y="452" fill="#d9d2f0">Providers</tspan>
+<tspan x="42" y="468" fill="#d9d2f0">Name                                                              Recorded      In     Out  Cache     Cost</tspan>
+<tspan x="42" y="484" fill="#d9d2f0">----------------------------------------------------------------  --------  ------  ------  -----  -------</tspan>
+<tspan x="42" y="500" fill="#d9d2f0">opencode                                                            52,485  35,420  11,650  5,415    $0.30</tspan>
+<tspan x="42" y="516" fill="#d9d2f0">codex                                                               19,278  13,800   3,918  1,560    $0.06</tspan>
+<tspan x="42" y="532" fill="#d9d2f0">antigravity                                                          4,779   3,040     859    880  $0.0091</tspan>
 <tspan x="42" y="548" fill="#e6e2ff"> </tspan>
 <tspan x="42" y="564" fill="#d9d2f0">Projects</tspan>
-<tspan x="42" y="580" fill="#d9d2f0">Name                              Recorded  In      Out    Cache</tspan>
-<tspan x="42" y="596" fill="#d9d2f0">--------------------------------  --------  ------  -----  -----</tspan>
-<tspan x="42" y="612" fill="#d9d2f0">/Users/kaanyaren/GitHub/OC2Token  41,063    28,320  8,558  4,185</tspan>
-<tspan x="42" y="628" fill="#d9d2f0">/Users/kaanyaren/GitHub/opencode  30,700    20,900  7,010  2,790</tspan>
-<tspan x="42" y="644" fill="#d9d2f0">/Users/kaanyaren/work/client-app  4,779     3,040   859    880  </tspan>
+<tspan x="42" y="580" fill="#d9d2f0">Name                                                              Recorded      In     Out  Cache     Cost</tspan>
+<tspan x="42" y="596" fill="#d9d2f0">----------------------------------------------------------------  --------  ------  ------  -----  -------</tspan>
+<tspan x="42" y="612" fill="#d9d2f0">/var/folders/46/vr028bmn6611rlkm_bkd_m100000gn/T/oc2token-shots_    41,063  28,320   8,558  4,185    $0.12</tspan>
+<tspan x="42" y="628" fill="#d9d2f0">/var/folders/46/vr028bmn6611rlkm_bkd_m100000gn/T/oc2token-shots_    30,700  20,900   7,010  2,790    $0.24</tspan>
+<tspan x="42" y="644" fill="#d9d2f0">/var/folders/46/vr028bmn6611rlkm_bkd_m100000gn/T/oc2token-shots_     4,779   3,040     859    880  $0.0091</tspan>
 </text>
 </g>
 </svg>

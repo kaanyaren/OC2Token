@@ -156,15 +156,17 @@ oc2token --no-color     # or NO_COLOR=1 for plain output
 | Key / Click | Action |
 |-------------|--------|
 | `r` / `R` · **click Refresh** | Refresh now |
-| `1` / `2` / `3` / `4` · **click top card, digit, or period name** | Select **hour · day · week · month** |
-| `Tab` / `←` `→` / `↑` `↓` | Cycle windows (or breakdown tables when Settings is closed) |
+| `1` / `2` / `3` / `4` · **click top card, digit, or period name** | Select the visible card in that slot |
+| `Tab` / `←` `→` / `↑` `↓` | Cycle visible cards (or breakdown tables when Settings is closed) |
 | `Space` · **left/right-click a table header** | Expand/collapse a breakdown table |
 | `p` · **click Projects** | Projects panel (click again to close) |
-| `s` · **click Settings, a provider row, a table row, or the refresh slider** | Settings — toggle providers, show/hide Providers & Projects tables, adjust refresh |
+| `s` · **click Settings, a provider row, a table row, a card slot, or the refresh slider** | Settings — toggle providers, show/hide Providers & Projects tables, choose top cards, adjust refresh |
 | `?` · **click Help** | Help |
 | `q` / `Ctrl+C` · **click Quit** | Quit |
 
 Settings persist under the cache directory (`~/Library/Caches/oc2token` on macOS by default; `$XDG_CACHE_HOME/oc2token` when `XDG_CACHE_HOME` is set, otherwise `~/Library/Caches/oc2token` — see `src/application.ts:47-50`). Override with `--cache-dir`. At least one provider must stay enabled.
+
+**Top cards.** Four cards are shown; the Settings panel chooses which windows occupy the four slots (`hour`, `day`, `week`, `month` by default, plus dashboard-only `15m`, `30m`, `2h`). The short ranges are derived from already-collected data and never change collection, JSON, table, or CLI output: a card with no evidence in range shows `n/a`, and its model/provider/project splits come from records only, so a stats-only provider is absent from a short-range split rather than fabricated.
 
 **Theme.** Purple carries structure, orange carries activity and focus, cyan carries inputs. Respects `NO_COLOR` and `--no-color`.
 

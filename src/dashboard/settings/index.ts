@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { type ProviderKind } from "../../domain/index.js";
 import { defaultCacheDirectory } from "../../application.js";
 import { isProviderKind } from "../../domain/records.js";
+import {
+  DEFAULT_VISIBLE_CARDS,
+  normalizeVisibleCards,
+  type DashboardCardKind,
+} from "../render/types.js";
 
 export const SETTINGS_MIN_REFRESH_SECONDS = 60;
 export const SETTINGS_MAX_REFRESH_SECONDS = 4 * 60 * 60; // 14400
@@ -17,6 +22,8 @@ export interface DashboardSettings {
   readonly showProvidersTable?: boolean;
   /** Show the Projects breakdown table (default true for legacy files). */
   readonly showProjectsTable?: boolean;
+  /** Four visible top cards (default hour/day/week/month for legacy files). */
+  readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
 }
 
 export function clampRefreshIntervalSeconds(value: number): number {
@@ -107,6 +114,7 @@ export function normalizeSettings(value: unknown): DashboardSettings {
       refreshIntervalSeconds: SETTINGS_DEFAULT_REFRESH_SECONDS,
       showProvidersTable: true,
       showProjectsTable: true,
+      visibleCards: [...DEFAULT_VISIBLE_CARDS],
     };
   }
   const record = value as Record<string, unknown>;
@@ -118,6 +126,8 @@ export function normalizeSettings(value: unknown): DashboardSettings {
     // Missing (legacy settings.json) means shown.
     showProvidersTable: record.showProvidersTable !== false,
     showProjectsTable: record.showProjectsTable !== false,
+    // Missing (legacy settings.json) means the legacy hour/day/week/month layout.
+    visibleCards: normalizeVisibleCards(record.visibleCards),
   };
 }
 
@@ -171,6 +181,7 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settings.refreshIntervalSeconds),
       showProvidersTable: settings.showProvidersTable !== false,
       showProjectsTable: settings.showProjectsTable !== false,
+      visibleCards: normalizeVisibleCards(settings.visibleCards),
     },
     null,
     2,

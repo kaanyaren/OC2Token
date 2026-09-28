@@ -7,16 +7,19 @@ import { spawn } from "node:child_process";
 
 import {
   ANSI,
+  CARD_KIND_ORDER,
   createStableRedraw,
   footerClickAction,
   footerTokenAtX,
   getCardHitRegions,
   GITHUB_URL,
+  normalizeVisibleCards,
   REFRESH_PRESETS,
   renderDashboard,
   renderJSON,
   renderTable,
   stripAnsi,
+  type DashboardCardKind,
   type DashboardSnapshotInput,
 } from "./output/index.js";
 import {
@@ -482,6 +485,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     refreshIntervalSeconds: number;
     showProvidersTable: boolean;
     showProjectsTable: boolean;
+    visibleCards: DashboardCardKind[];
     focusedIndex: number;
   } = {
     visible: false,
@@ -489,8 +493,14 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     refreshIntervalSeconds: initialSettingsInterval,
     showProvidersTable: persisted?.showProvidersTable !== false,
     showProjectsTable: persisted?.showProjectsTable !== false,
+    visibleCards: normalizeVisibleCards(persisted?.visibleCards),
     focusedIndex: 0,
   };
+  // Active card. Ephemeral: collection always covers all four base windows,
+  // so this only chooses what the trend and breakdowns display.
+  let selectedCard: DashboardCardKind = settingsState.visibleCards.includes("day")
+    ? "day"
+    : settingsState.visibleCards[0]!;
   let appliedEnabled = new Set(settingsState.enabledProviders);
   let appliedInterval = initialSchedulerInterval;
 
@@ -500,7 +510,35 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settingsState.refreshIntervalSeconds),
       showProvidersTable: settingsState.showProvidersTable,
       showProjectsTable: settingsState.showProjectsTable,
+      visibleCards: [...settingsState.visibleCards],
     }, options.cacheDirectory);
+  };
+
+  /** Select a card. Collected kinds also move the coordinator period. */
+  const selectCard = (kind: DashboardCardKind): void => {
+    selectedCard = kind;
+    if (kind === "hour" || kind === "day" || kind === "week" || kind === "month") {
+      coordinator.setPeriod(kind);
+    }
+    draw();
+  };
+
+  /** Cycle a settings card slot to the next kind not used by another slot. */
+  const cycleCardSlot = (slot: number): void => {
+    const current = settingsState.visibleCards;
+    const start = CARD_KIND_ORDER.indexOf(current[slot]!);
+    for (let step = 1; step <= CARD_KIND_ORDER.length; step += 1) {
+      const next = CARD_KIND_ORDER[(start + step) % CARD_KIND_ORDER.length]!;
+      if (!current.includes(next)) {
+        const updated = [...current];
+        updated[slot] = next;
+        settingsState.visibleCards = updated;
+        if (!updated.includes(selectedCard)) selectedCard = next;
+        persistCurrentSettings();
+        draw();
+        return;
+      }
+    }
   };
 
   const applySettings = (): void => {
@@ -553,7 +591,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       color: options.color,
       width: Math.max(20, io.stdout.columns || 100),
       now: clock.wallNow(),
-      selectedWindow: state.period,
+      selectedWindow: selectedCard,
       help,
       // Always pass table visibility so hidden tables stay hidden when the
       // panel is closed; the panel itself only renders when visible.
@@ -563,8 +601,10 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         refreshIntervalSeconds: settingsState.refreshIntervalSeconds,
         showProvidersTable: settingsState.showProvidersTable,
         showProjectsTable: settingsState.showProjectsTable,
+        visibleCards: [...settingsState.visibleCards],
         focusedIndex: settingsState.focusedIndex,
       },
+      visibleCards: [...settingsState.visibleCards],
       collapsedTables: { ...collapsedTables },
       ...(settingsState.visible ? {} : { focusedTable }),
       ...(projectsVisible ? { projects: { visible: true } } : {}),
@@ -658,6 +698,13 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           draw();
           return;
         }
+        const cardSlot = line.match(/Card ([1-4]):/);
+        if (cardSlot !== null) {
+          const slot = Number(cardSlot[1]) - 1;
+          settingsState.focusedIndex = 6 + slot;
+          cycleCardSlot(slot);
+          return;
+        }
         const providers = [...ALL_KINDS];
         const row = providers.findIndex(
           (name) => (line.includes("◉") || line.includes("○")) && line.includes(name),
@@ -744,9 +791,13 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         void coordinator.manualRefresh();
         return;
       }
-      if (action === "hour" || action === "day" || action === "week" || action === "month") {
-        coordinator.setPeriod(action);
-        draw();
+      if (typeof action === "object") {
+        if ("slot" in action) {
+          const kind = settingsState.visibleCards[action.slot];
+          if (kind !== undefined) selectCard(kind);
+          return;
+        }
+        selectCard(action.card);
         return;
       }
       if (action === "projects") {
@@ -791,14 +842,13 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       }
       if (token !== undefined) return; // decorative footer token (Periods, Navigate, …)
     }
-    // Top cards select the period (panels capture their own clicks above).
+    // Top cards select the card (panels capture their own clicks above).
     if (!settingsState.visible && !projectsVisible) {
       const w = Math.max(20, io.stdout.columns || 100);
-      const regions = getCardHitRegions(w);
+      const regions = getCardHitRegions(w, settingsState.visibleCards);
       for (const r of regions) {
         if (cx >= r.x1 && cx <= r.x2 && cy >= r.y1 && cy <= r.y2) {
-          coordinator.setPeriod(r.kind);
-          draw();
+          selectCard(r.kind);
           break;
         }
       }
@@ -809,16 +859,15 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     inputBuffer += chunk.toString();
     const value = inputBuffer;
     inputBuffer = "";
-    const periods: UsageWindowKind[] = ["hour", "day", "week", "month"];
-    const nextPeriod = (): UsageWindowKind => {
-      const current = coordinator.getState().period;
-      const idx = periods.indexOf(current);
-      return periods[(idx + 1) % periods.length]!;
+    const nextCard = (): DashboardCardKind => {
+      const cards = settingsState.visibleCards;
+      const idx = cards.indexOf(selectedCard);
+      return cards[(idx + 1) % cards.length]!;
     };
-    const prevPeriod = (): UsageWindowKind => {
-      const current = coordinator.getState().period;
-      const idx = periods.indexOf(current);
-      return periods[(idx - 1 + periods.length) % periods.length]!;
+    const prevCard = (): DashboardCardKind => {
+      const cards = settingsState.visibleCards;
+      const idx = cards.indexOf(selectedCard);
+      return cards[(idx - 1 + cards.length) % cards.length]!;
     };
     let i = 0;
     while (i < value.length) {
@@ -863,10 +912,10 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       if (value.startsWith("\u001b[", i)) {
         if (value.startsWith("\u001b[Z", i)) {
           if (settingsState.visible) {
-            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 6;
+            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 10;
             draw();
           } else {
-            coordinator.setPeriod(prevPeriod());
+            selectCard(prevCard());
           }
           i += 3;
           continue;
@@ -882,13 +931,13 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const code = value[i + 2];
           if (settingsState.visible) {
             if (code === "A") {
-              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 6;
+              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 10;
               draw();
               i += 3;
               continue;
             }
             if (code === "B") {
-              settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 6;
+              settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 10;
               draw();
               i += 3;
               continue;
@@ -919,12 +968,12 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
             }
           } else {
             if (code === "A" || code === "D") {
-              coordinator.setPeriod(prevPeriod());
+              selectCard(prevCard());
               i += 3;
               continue;
             }
             if (code === "B" || code === "C") {
-              coordinator.setPeriod(nextPeriod());
+              selectCard(nextCard());
               i += 3;
               continue;
             }
@@ -971,14 +1020,15 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           i += 1;
           continue;
         }
-        if (key === "1" || key === "2" || key === "3") {
-          coordinator.setPeriod(key === "1" ? "hour" : key === "2" ? "day" : key === "3" ? "week" : "month");
+        if (key === "1" || key === "2" || key === "3" || key === "4") {
+          const kind = settingsState.visibleCards[Number(key) - 1];
+          if (kind !== undefined) selectCard(kind);
           draw();
           i += 1;
           continue;
         }
         if (key === "\t" || key === "\u0009") {
-          coordinator.setPeriod(nextPeriod());
+          selectCard(nextCard());
           draw();
           i += 1;
           continue;
@@ -1044,6 +1094,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               settingsState.showProjectsTable = !settingsState.showProjectsTable;
               persistCurrentSettings();
               draw();
+            } else if (settingsState.focusedIndex >= 6 && settingsState.focusedIndex <= 9) {
+              cycleCardSlot(settingsState.focusedIndex - 6);
             }
           } else {
             // Settings panel closed: space toggles the focused table's collapse.
@@ -1055,7 +1107,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         }
         if (key === "\t" || key === "\u0009") {
           if (settingsState.visible) {
-            settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 6;
+            settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 10;
           } else {
             const order: Array<"models" | "providers" | "projects"> = ["models", "providers", "projects"];
             const idx = order.indexOf(focusedTable);
@@ -1168,12 +1220,13 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "\t" || key === "\u0009") {
-          coordinator.setPeriod(nextPeriod());
+          selectCard(nextCard());
           i += 1;
           continue;
         }
         if (key === "1" || key === "2" || key === "3" || key === "4") {
-          coordinator.setPeriod(key === "1" ? "hour" : key === "2" ? "day" : key === "3" ? "week" : "month");
+          const kind = settingsState.visibleCards[Number(key) - 1];
+          if (kind !== undefined) selectCard(kind);
         }
         if (key === "p" || key === "P") {
           projectsVisible = true;

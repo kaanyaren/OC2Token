@@ -14,7 +14,7 @@
 <rect x="24" y="58" width="625" height="476" rx="8" fill="#15101f"/>
 <text font-family="'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace" font-size="12" line-height="16" xml:space="preserve">
 <tspan x="42" y="84" fill="#d9d2f0">{</tspan>
-<tspan x="42" y="100" fill="#d9d2f0">  &quot;schemaVersion&quot;: 3,</tspan>
+<tspan x="42" y="100" fill="#d9d2f0">  &quot;schemaVersion&quot;: 4,</tspan>
 <tspan x="42" y="116" fill="#d9d2f0">  &quot;windows&quot;: {</tspan>
 <tspan x="42" y="132" fill="#d9d2f0">    &quot;hour&quot;: {</tspan>
 <tspan x="42" y="148" fill="#d9d2f0">      &quot;kind&quot;: &quot;hour&quot;,</tspan>

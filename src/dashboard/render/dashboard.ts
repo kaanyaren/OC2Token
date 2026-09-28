@@ -1,4 +1,4 @@
-import type { UsageTotals, UsageWindowKind } from "../../domain/index.js";
+import type { UsageTotals } from "../../domain/index.js";
 import {
   ANSI,
   ansiEnabled,
@@ -34,9 +34,12 @@ import {
   stripAnsi,
 } from "./format.js";
 import {
-  allWindowKinds,
+  DEFAULT_VISIBLE_CARDS,
+  isDerivedCardKind,
   normalizeDashboardSnapshot,
+  normalizeVisibleCards,
   type BreakdownTotal,
+  type DashboardCardKind,
   type DashboardRenderOptions,
   type DashboardSnapshotInput,
   type DashboardWindow,
@@ -131,8 +134,29 @@ function border(width: number, left: string, fill: string, right: string): strin
   return left + fill.repeat(Math.max(0, width - 2)) + right;
 }
 
-function cardTitle(kind: UsageWindowKind): string {
-  return kind === "hour" ? "LAST 60 MINUTES" : kind === "day" ? "TODAY" : kind === "week" ? "THIS WEEK" : "LAST MONTH";
+function cardTitle(kind: DashboardCardKind): string {
+  switch (kind) {
+    case "hour": return "LAST 60 MINUTES";
+    case "day": return "TODAY";
+    case "week": return "THIS WEEK";
+    case "month": return "LAST MONTH";
+    case "15m": return "LAST 15 MINUTES";
+    case "30m": return "LAST 30 MINUTES";
+    case "2h": return "LAST 2 HOURS";
+  }
+}
+
+/** Short footer/CLI label for a card kind. */
+export function shortCardLabel(kind: DashboardCardKind): string {
+  switch (kind) {
+    case "hour": return "Hour";
+    case "day": return "Today";
+    case "week": return "Week";
+    case "month": return "Month";
+    case "15m": return "15m";
+    case "30m": return "30m";
+    case "2h": return "2h";
+  }
 }
 
 function panelHeading(
@@ -161,7 +185,7 @@ function providerAccent(name: string, color: boolean, bright = false): (value: s
 }
 
 function cardLines(
-  kind: UsageWindowKind,
+  kind: DashboardCardKind,
   window: DashboardWindow,
   width: number,
   color: boolean,
@@ -170,9 +194,15 @@ function cardLines(
   const inner = Math.max(1, width - 2);
   const borderColor = selected ? ANSI.orange : ANSI.purpleDeep;
   const totalLabel = inner < 15 ? "Total" : "Recorded";
-  const total = `${themePurple(totalLabel, color, true)}  ${themeOrange(formatTokenCount(window.totals.recorded_total), color, true)}`;
+  // Unmeasured derived ranges show n/a, never a zero that reads as measured.
+  const totalValue = window.unmeasured === true
+    ? "n/a"
+    : formatTokenCount(window.totals.recorded_total);
+  const total = `${themePurple(totalLabel, color, true)}  ${themeOrange(totalValue, color, true)}`;
   const first = pad(total, inner);
-  const rawComponents = formatTokenBreakdown(window.totals);
+  const rawComponents = window.unmeasured === true
+    ? "No sub-range data recorded."
+    : formatTokenBreakdown(window.totals);
   // Preserve the 4-space gaps ("    ") — truncate() would collapse them via safeLabel.
   // Adaptively fall back to 2 spaces when the 4-space layout doesn't fit.
   let displayComponents = rawComponents;
@@ -211,14 +241,17 @@ const CARD_GAP = 2;
 const FOUR_CARD_LAYOUT_MIN_WIDTH = CARD_MIN_WIDTH * 4 + CARD_GAP * 3;
 
 export interface CardHitRegion {
-  readonly kind: UsageWindowKind;
+  readonly kind: DashboardCardKind;
   readonly x1: number;
   readonly y1: number;
   readonly x2: number;
   readonly y2: number;
 }
 
-export function getCardHitRegions(width: number): ReadonlyArray<CardHitRegion> {
+export function getCardHitRegions(
+  width: number,
+  kinds: ReadonlyArray<DashboardCardKind> = [...DEFAULT_VISIBLE_CARDS],
+): ReadonlyArray<CardHitRegion> {
   const clamped = Math.max(20, width);
   const contentWidth = Math.max(1, clamped - APP_PADDING * 2);
   const headerHeight = HEADER_LINES;
@@ -226,7 +259,7 @@ export function getCardHitRegions(width: number): ReadonlyArray<CardHitRegion> {
     const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP * 3) / 4));
     const y1 = headerHeight + 1;
     const y2 = y1 + CARD_LINES - 1;
-    return allWindowKinds().map((kind, idx) => {
+    return kinds.map((kind, idx) => {
       const x1 = APP_PADDING + idx * (cardWidth + CARD_GAP) + 1;
       const x2 = x1 + cardWidth - 1;
       return { kind, x1, y1, x2, y2 };
@@ -235,7 +268,7 @@ export function getCardHitRegions(width: number): ReadonlyArray<CardHitRegion> {
   if (contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
     const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP) / 2));
     const yGap = 0; // stacked rows touch — no blank separator (see renderDashboard)
-    return allWindowKinds().map((kind, idx) => {
+    return kinds.map((kind, idx) => {
       const column = idx % 2;
       const row = Math.floor(idx / 2);
       const x1 = APP_PADDING + column * (cardWidth + CARD_GAP) + 1;
@@ -245,7 +278,7 @@ export function getCardHitRegions(width: number): ReadonlyArray<CardHitRegion> {
   }
   const cardWidth = Math.max(12, Math.min(CARD_MIN_WIDTH, contentWidth - 2));
   const yGap = 0; // stacked cards touch — no blank separator (see renderDashboard)
-  return allWindowKinds().map((kind, idx) => {
+  return kinds.map((kind, idx) => {
     const y1 = headerHeight + 1 + idx * (CARD_LINES + yGap);
     const y2 = y1 + CARD_LINES - 1;
     const x1 = APP_PADDING + 1;
@@ -295,13 +328,24 @@ function renderStatusBox(
   ];
 }
 
+/**
+ * Resolve the display data for any visible card: collected windows come from
+ * the snapshot, derived sub-windows from the normalized derivation.
+ */
+export function cardWindow(
+  snapshot: ReturnType<typeof normalizeDashboardSnapshot>,
+  kind: DashboardCardKind,
+): DashboardWindow {
+  return isDerivedCardKind(kind) ? snapshot.derived[kind] : snapshot.windows[kind];
+}
+
 function renderTrend(
   snapshot: ReturnType<typeof normalizeDashboardSnapshot>,
-  selected: UsageWindowKind,
+  selected: DashboardCardKind,
   color: boolean,
   width: number,
 ): string[] {
-  const trend = snapshot.windows[selected].trends;
+  const trend = cardWindow(snapshot, selected).trends;
   const title = `Trend · ${cardTitle(selected).toLowerCase()}`;
   if (trend.length === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
 
@@ -625,6 +669,28 @@ function renderSettingsPanel(
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
+  // Top cards heading (focused indices 6-9; one row per card slot)
+  const cardsHeading = truncate("Cards  —  space to cycle", inner);
+  lines.push(padPrefix + `│${pad(themePurple(cardsHeading, color, true), inner)}│`);
+
+  const visible = normalizeVisibleCards(settings.visibleCards);
+  for (let slot = 0; slot < 4; slot += 1) {
+    const kind = visible[slot]!;
+    const focused = settings.focusedIndex === 6 + slot;
+    const prefix = focused ? themeOrange("▶ ", color, true) : "  ";
+    const suffix = focused ? "  ← cycle" : "";
+    const suffixLen = focused ? 10 : 0; // "  ← cycle" visible length
+    const nameAvail = Math.max(4, inner - 4 - suffixLen);
+    const label = `Card ${slot + 1}: ${shortCardLabel(kind)}`;
+    const nameTrunc = truncate(label, nameAvail);
+    const nameColored = themeWhite(nameTrunc, color, true);
+    const lineContent = `${prefix}${nameColored}`;
+    const full = focused ? `${lineContent}${themeOrange(suffix, color)}` : lineContent;
+    lines.push(padPrefix + `│${pad(full, inner)}│`);
+  }
+
+  lines.push(padPrefix + `│${" ".repeat(inner)}│`);
+
   // Refresh interval heading with value
   const intervalFocused = settings.focusedIndex === 5;
   const intervalHeadingPlain = "Refresh interval";
@@ -702,19 +768,20 @@ function renderSettingsPanel(
 
 function renderProjectsPanel(
   snapshot: ReturnType<typeof normalizeDashboardSnapshot>,
-  selected: UsageWindowKind,
+  selected: DashboardCardKind,
   width: number,
   color: boolean,
 ): string[] {
-  const windowProjects = snapshot.windows[selected]?.projects ?? [];
+  const selectedData = cardWindow(snapshot, selected);
+  const windowProjects = selectedData.projects ?? [];
   const globalProjects = snapshot.projects;
   const projects = windowProjects.length > 0 ? windowProjects : globalProjects;
   const panelWidth = Math.min(width, Math.min(Math.max(42, width - 6), 76));
   const inner = Math.max(1, panelWidth - 2);
   const leftPad = Math.max(0, Math.floor((width - panelWidth) / 2));
   const padPrefix = " ".repeat(leftPad);
-  const titleKind = selected === "hour" ? "Last 60 Minutes" : selected === "day" ? "Today" : selected === "week" ? "This Week" : "Last Month";
-  const totalForWindow = snapshot.windows[selected]?.totals.recorded_total ?? 0;
+  const titleKind = cardTitle(selected).toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+  const totalForWindow = selectedData.totals.recorded_total ?? 0;
 
   const lines: string[] = [];
   lines.push(padPrefix + paint(border(panelWidth, "╭", "─", "╮"), ANSI.purpleDeep, color));
@@ -740,7 +807,7 @@ function renderProjectsPanel(
     let headerCost = "";
     if (showCost) {
       const costStrs = visible.map((entry) => formatCost(entry.cost));
-      const winCostStr = formatCost(snapshot.windows[selected]?.cost);
+      const winCostStr = formatCost(cardWindow(snapshot, selected)?.cost);
       const allCostStrs = [...costStrs, winCostStr];
       costWidth = Math.max("Cost".length, ...allCostStrs.map((s) => [...s].length));
       headerCost = themeCost("Cost".padStart(costWidth), color);
@@ -804,7 +871,7 @@ function renderProjectsPanel(
       lines.push(padPrefix + `│${pad(`  ${themePurple(more, color)}`, inner)}│`);
     }
     lines.push(padPrefix + `│${" ".repeat(inner)}│`);
-    const windowCostStr = formatCost(snapshot.windows[selected]?.cost);
+    const windowCostStr = formatCost(cardWindow(snapshot, selected)?.cost);
     const totalLine = showCost
       ? `Total projects: ${projects.length}  ·  Period total: ${formatTokenCount(totalForWindow)}  ·  Period cost: ${windowCostStr}`
       : `Total projects: ${projects.length}  ·  Period total: ${formatTokenCount(totalForWindow)}`;
@@ -835,8 +902,17 @@ function renderCredit(width: number, color: boolean): string {
   return `${" ".repeat(left)}${colored}`;
 }
 
-function renderFooter(help: boolean, color: boolean, width: number): string[] {
+function renderFooter(
+  help: boolean,
+  color: boolean,
+  width: number,
+  visible: ReadonlyArray<DashboardCardKind> = [...DEFAULT_VISIBLE_CARDS],
+): string[] {
   const key = (value: string): string => themeOrange(value, color, true);
+  // Period segment follows the visible cards: keys 1-4 select slots in order.
+  const periodWide = visible
+    .map((kind, index) => `${key(String(index + 1))} ${shortCardLabel(kind)}`)
+    .join("  ");
   if (help) {
     if (width < 50) {
       return [
@@ -857,7 +933,7 @@ function renderFooter(help: boolean, color: boolean, width: number): string[] {
     return [
       "",
       panelHeading("Help", width, color, "orange"),
-      `  ${key("r/R")} Refresh now   ${key("1")} Hour   ${key("2")} Today   ${key("3")} Week   ${key("4")} Month   ${key("Tab/Arrows")} Navigate`,
+      `  ${key("r/R")} Refresh now   ${periodWide}   ${key("Tab/Arrows")} Navigate`,
       `  ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Toggle help`,
     ];
   }
@@ -872,33 +948,33 @@ function renderFooter(help: boolean, color: boolean, width: number): string[] {
     return [` ${key("r")} Refresh  ${key("1/2/3/4")} Periods  ${key("p")} Proj ${key("s")} ${key("q")} Quit ${key("?")} Help`];
   }
   if (width < 78) {
-    return [` ${key("r")} ${key("1")} Hour  ${key("2")} Today  ${key("3")} Week  ${key("4")} Month  ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
+    return [` ${key("r")} ${periodWide}  ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
   }
   if (width < 90) {
-    return [` ${key("r")} ${key("1")} Hour  ${key("2")} Today  ${key("3")} Week  ${key("4")} Month  ${key("p")} Proj  ${key("s")} Settings  ${key("q")} Quit  ${key("?")} Help`];
+    return [` ${key("r")} ${periodWide}  ${key("p")} Proj  ${key("s")} Settings  ${key("q")} Quit  ${key("?")} Help`];
   }
   if (width < 120) {
     return [
-      ` ${key("r")} Refresh  ${key("1")} Hour  ${key("2")} Today  ${key("3")} Week  ${key("4")} Month  ${key("p")} Projects  ${key("s")} Settings  ${key("q")} Quit  ${key("?")} Help`,
+      ` ${key("r")} Refresh  ${periodWide}  ${key("p")} Projects  ${key("s")} Settings  ${key("q")} Quit  ${key("?")} Help`,
     ];
   }
   return [
     "",
-    ` ${key("r")} Refresh   ${key("1")} Hour   ${key("2")} Today   ${key("3")} Week   ${key("4")} Month   ${key("Tab/Arrows")} Navigate   ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Help`,
+    ` ${key("r")} Refresh   ${periodWide}   ${key("Tab/Arrows")} Navigate   ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Help`,
   ];
 }
 
 /** Dashboard action triggered by clicking a footer token. */
 export type FooterClickAction =
   | "refresh"
-  | "hour"
-  | "day"
-  | "week"
-  | "month"
   | "projects"
   | "settings"
   | "quit"
-  | "help";
+  | "help"
+  /** Numeric keys 1-4 select a visible card slot in order. */
+  | { readonly slot: number }
+  /** Named period tokens select a card kind directly. */
+  | { readonly card: DashboardCardKind };
 
 /**
  * Map a footer token (whitespace-delimited word under the cursor) to its
@@ -911,17 +987,24 @@ export function footerClickAction(token: string): FooterClickAction | undefined 
     case "Refresh":
       return "refresh";
     case "1":
-    case "Hour":
-      return "hour";
     case "2":
-    case "Today":
-      return "day";
     case "3":
-    case "Week":
-      return "week";
     case "4":
+      return { slot: Number(token) - 1 };
+    case "Hour":
+      return { card: "hour" };
+    case "Today":
+      return { card: "day" };
+    case "Week":
+      return { card: "week" };
     case "Month":
-      return "month";
+      return { card: "month" };
+    case "15m":
+      return { card: "15m" };
+    case "30m":
+      return { card: "30m" };
+    case "2h":
+      return { card: "2h" };
     case "p":
     case "Proj":
     case "Projects":
@@ -966,15 +1049,16 @@ export function renderDashboard(
   const width = Math.max(1, terminalWidth - APP_PADDING * 2);
   const color = colorEnabled(options);
   const selected = options.selectedWindow ?? "day";
+  const visibleCards = normalizeVisibleCards(options.visibleCards);
   const lines = renderHeader(color, width);
   const cardWidth = width >= FOUR_CARD_LAYOUT_MIN_WIDTH
     ? Math.max(CARD_MIN_WIDTH, Math.floor((width - CARD_GAP * 3) / 4))
     : width >= WIDE_LAYOUT_MIN_WIDTH
       ? Math.max(CARD_MIN_WIDTH, Math.floor((width - CARD_GAP) / 2))
       : Math.max(12, Math.min(CARD_MIN_WIDTH, width - 2));
-  const cards = allWindowKinds().map((kind) => cardLines(
+  const cards = visibleCards.map((kind) => cardLines(
     kind,
-    snapshot.windows[kind],
+    cardWindow(snapshot, kind),
     cardWidth,
     color,
     selected === kind,
@@ -993,20 +1077,20 @@ export function renderDashboard(
   lines.push("");
   lines.push(...renderTrend(snapshot, selected, color, width));
   lines.push("");
-  const selectedWindow = snapshot.windows[selected];
+  const selectedData = cardWindow(snapshot, selected);
   const breakdownWidths = breakdownColumnWidths([
-    ...selectedWindow.models,
-    ...selectedWindow.providers,
-    ...selectedWindow.projects,
+    ...selectedData.models,
+    ...selectedData.providers,
+    ...selectedData.projects,
   ]);
   const collapsed = options.collapsedTables ?? {};
   const focused = options.focusedTable;
-  lines.push(...renderBreakdown(`Models · ${cardTitle(selected)}`, selectedWindow.models, color, width, "purple", breakdownWidths, collapsed.models === true, focused === "models"));
+  lines.push(...renderBreakdown(`Models · ${cardTitle(selected)}`, selectedData.models, color, width, "purple", breakdownWidths, collapsed.models === true, focused === "models"));
   if (options.settings?.showProvidersTable !== false) {
-    lines.push(...renderBreakdown(`Providers · ${cardTitle(selected)}`, selectedWindow.providers, color, width, "orange", breakdownWidths, collapsed.providers === true, focused === "providers"));
+    lines.push(...renderBreakdown(`Providers · ${cardTitle(selected)}`, selectedData.providers, color, width, "orange", breakdownWidths, collapsed.providers === true, focused === "providers"));
   }
   if (options.settings?.showProjectsTable !== false) {
-    lines.push(...renderBreakdown(`Projects · ${cardTitle(selected)}`, selectedWindow.projects, color, width, "cyan", breakdownWidths, collapsed.projects === true, focused === "projects"));
+    lines.push(...renderBreakdown(`Projects · ${cardTitle(selected)}`, selectedData.projects, color, width, "cyan", breakdownWidths, collapsed.projects === true, focused === "projects"));
   }
   if (snapshot.coverage.errors.length > 0) {
     lines.push("");
@@ -1018,7 +1102,7 @@ export function renderDashboard(
     }
   }
   lines.push(...renderStatusBox(snapshot, color, width));
-  lines.push(...renderFooter(options.help === true, color, width));
+  lines.push(...renderFooter(options.help === true, color, width, visibleCards));
 
   if (options.settings?.visible === true) {
     lines.push("");

@@ -50,14 +50,84 @@ export interface DashboardWindow {
   readonly window: UsageWindow;
   readonly totals: UsageTotals;
   readonly cost?: number;
+  /**
+   * True when a derived sub-window had no evidence at all (no parent trend
+   * buckets in range and no records). Cards must render n/a, never zero.
+   */
+  readonly unmeasured?: boolean;
   readonly trends: ReadonlyArray<TrendBucket>;
   readonly models: ReadonlyArray<BreakdownTotal>;
   readonly providers: ReadonlyArray<BreakdownTotal>;
   readonly projects: ReadonlyArray<BreakdownTotal>;
 }
 
+/**
+ * Dashboard-only sub-windows. These are never collected, cached, or emitted
+ * in JSON/table/CLI output — the renderer derives them from already-collected
+ * data (parent trend buckets first, records as fallback).
+ */
+export const DERIVED_CARD_KINDS = ["15m", "30m", "2h"] as const;
+export type DerivedCardKind = (typeof DERIVED_CARD_KINDS)[number];
+
+/** Every card the dashboard can show: collected windows plus derived ones. */
+export type DashboardCardKind = UsageWindowKind | DerivedCardKind;
+
+/** Fixed cycle order for the settings card slots. */
+export const CARD_KIND_ORDER: readonly DashboardCardKind[] = [
+  "hour",
+  "day",
+  "week",
+  "month",
+  "15m",
+  "30m",
+  "2h",
+];
+
+/** Legacy layout. New installs and legacy settings files start here. */
+export const DEFAULT_VISIBLE_CARDS: readonly DashboardCardKind[] = [
+  "hour",
+  "day",
+  "week",
+  "month",
+];
+
+export function isDashboardCardKind(value: unknown): value is DashboardCardKind {
+  return typeof value === "string" &&
+    ((USAGE_WINDOW_KINDS as readonly string[]).includes(value) ||
+      (DERIVED_CARD_KINDS as readonly string[]).includes(value));
+}
+
+export function isDerivedCardKind(value: unknown): value is DerivedCardKind {
+  return typeof value === "string" &&
+    (DERIVED_CARD_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Normalize a visible-cards list to exactly four distinct kinds. Legacy or
+ * corrupt values fall back to the default layout; extras are dropped and gaps
+ * are filled from the default order.
+ */
+export function normalizeVisibleCards(value: unknown): DashboardCardKind[] {
+  const seen: DashboardCardKind[] = [];
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (isDashboardCardKind(entry) && !seen.includes(entry)) {
+        seen.push(entry);
+      }
+      if (seen.length === 4) break;
+    }
+  }
+  for (const kind of DEFAULT_VISIBLE_CARDS) {
+    if (seen.length === 4) break;
+    if (!seen.includes(kind)) seen.push(kind);
+  }
+  return seen;
+}
+
 export interface DashboardSnapshot {
   readonly windows: Readonly<Record<UsageWindowKind, DashboardWindow>>;
+  /** Derived sub-windows, computed from collected data at normalize time. */
+  readonly derived: Readonly<Record<DerivedCardKind, DashboardWindow>>;
   readonly source: string;
   readonly version: string;
   readonly lastUpdated: DateLike | null;
@@ -84,6 +154,8 @@ export interface DashboardSettingsView {
   readonly showProvidersTable?: boolean;
   /** Show the Projects breakdown table. Undefined (legacy) means shown. */
   readonly showProjectsTable?: boolean;
+  /** Four visible top cards. Undefined (legacy) means hour/day/week/month. */
+  readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
 }
 
 export interface DashboardProjectsView {
@@ -96,7 +168,10 @@ export interface DashboardRenderOptions {
   readonly color?: boolean;
   readonly width?: number;
   readonly now?: DateLike;
-  readonly selectedWindow?: UsageWindowKind;
+  /** Active card. May be a derived sub-window; collection always covers all four base windows. */
+  readonly selectedWindow?: DashboardCardKind;
+  /** Which four cards to show. Defaults to the legacy hour/day/week/month layout. */
+  readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
   readonly help?: boolean;
   readonly previousLineCount?: number;
   readonly settings?: DashboardSettingsView;
@@ -621,6 +696,116 @@ function breakdownForWindow(
   return normalizeBreakdown(global);
 }
 
+function zeroTotals(): UsageTotals {
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, recorded_total: 0 };
+}
+
+function sumTotals(values: ReadonlyArray<UsageTotals>): UsageTotals {
+  const totals = zeroTotals() as unknown as Record<string, number>;
+  for (const value of values) {
+    for (const component of COMPONENTS) totals[component]! += value[component];
+    totals["recorded_total"]! += value.recorded_total;
+  }
+  return totals as unknown as UsageTotals;
+}
+
+interface DerivedSpec {
+  readonly kind: DerivedCardKind;
+  /** Range length in minutes, anchored at the parent window's end. */
+  readonly minutes: number;
+  /** Smallest collected window fully containing the range. */
+  readonly parent: UsageWindowKind;
+  readonly label: string;
+}
+
+const DERIVED_SPECS: readonly DerivedSpec[] = [
+  { kind: "15m", minutes: 15, parent: "hour", label: "last 15 minutes" },
+  { kind: "30m", minutes: 30, parent: "hour", label: "last 30 minutes" },
+  { kind: "2h", minutes: 120, parent: "day", label: "last 2 hours" },
+];
+
+function bucketStart(bucket: TrendBucket): number | null {
+  if (bucket.from === undefined) return null;
+  const time = new Date(bucket.from).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+/**
+ * Derive a dashboard-only sub-window from already-collected data. Totals and
+ * trends prefer the parent window's trend buckets (consistent across stats
+ * and record sources, since mergeTrends/deriveTrends aggregate all sources);
+ * records are the fallback when the parent has no buckets. Breakdowns are
+ * always record-derived, so a stats-only provider is honestly absent from a
+ * derived split rather than fabricated. Returns unmeasured when neither
+ * source has evidence in range.
+ *
+ * `now` is the capture instant (the rolling hour's end), NOT the parent
+ * window's end: calendar windows (day/week) end at a future midnight.
+ */
+function deriveSubWindow(
+  root: UnknownRecord,
+  windows: Readonly<Record<UsageWindowKind, DashboardWindow>>,
+  spec: DerivedSpec,
+  now: Date,
+): DashboardWindow {
+  const parent = windows[spec.parent];
+  const to = new Date(now.getTime());
+  const from = new Date(to.getTime() - spec.minutes * 60 * 1000);
+  const synthWindow = { ...parent.window, from, to, label: spec.label };
+
+  const inRange = parent.trends.filter((bucket) => {
+    const start = bucketStart(bucket);
+    return start !== null && start >= from.getTime() && start < to.getTime();
+  });
+  const inRangeHasData = inRange.some((bucket) => bucket.totals.recorded_total > 0);
+  const parentHasData = parent.trends.some((bucket) => bucket.totals.recorded_total > 0);
+
+  let recordCount = 0;
+  if (Array.isArray(root.records)) {
+    for (const item of root.records) {
+      const record = asRecord(item);
+      if (record.completeness === "provisional") continue;
+      const createdAt = asDate(record.createdAt ?? record.time);
+      if (createdAt === null || !(createdAt instanceof Date)) continue;
+      const timestamp = createdAt.getTime();
+      if (timestamp >= from.getTime() && timestamp < to.getTime()) recordCount += 1;
+    }
+  }
+
+  // In-range zeros are observed zeros (measured) when the parent shows
+  // activity anywhere; otherwise with no records the range is unmeasured.
+  const measured = inRangeHasData || recordCount > 0 || (parentHasData && inRange.length > 0);
+  if (!measured) {
+    return {
+      window: synthWindow,
+      totals: zeroTotals(),
+      unmeasured: true as const,
+      trends: [],
+      models: [],
+      providers: [],
+      projects: [],
+    };
+  }
+
+  // Parent buckets aggregate all sources consistently; record-built buckets
+  // cover the parent-bucket gap. Either way totals sum the trends shown.
+  const trends = inRange.length > 0 ? inRange : deriveTrends(root, spec.parent, synthWindow);
+  const totals = sumTotals(trends.map((bucket) => bucket.totals));
+  const models = recordsAsBreakdown(root, "model", synthWindow);
+  const providers = recordsAsBreakdown(root, "provider", synthWindow);
+  const projects = recordsAsBreakdown(root, "project", synthWindow);
+  const cost = estimatedCostForBreakdowns(models, true);
+  return {
+    window: synthWindow,
+    totals,
+    ...(cost === undefined ? {} : { cost }),
+    trends,
+    models,
+    providers,
+    projects,
+  };
+}
+
 /**
  * Normalize the collector's shared-domain snapshot into the renderer's read-only
  * view. The renderer intentionally reads only metadata and token aggregates.
@@ -674,7 +859,13 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
   }
 
   const coverage = normalizeCoverage(root.coverage, stale);
-  const rawModelValues =
+  // Anchor derived ranges at the capture instant: the rolling hour always ends
+  // there, while calendar windows end at a future midnight.
+  const now = windows.hour.window.to;
+  const derived = {} as Record<DerivedCardKind, DashboardWindow>;
+  for (const spec of DERIVED_SPECS) {
+    derived[spec.kind] = deriveSubWindow(root, windows, spec, now);
+  }  const rawModelValues =
     root.models ??
     root.modelTotals ??
     asRecord(root.breakdown).models ??
@@ -717,6 +908,7 @@ export function normalizeDashboardSnapshot(input: DashboardSnapshotInput): Dashb
   const finalSource = hasMultiProviders ? "unified" : source;
   return {
     windows,
+    derived,
     source: finalSource,
     version: sourceVersion.version,
     lastUpdated: asDate(root.lastUpdated ?? metadata.lastUpdated ?? root.capturedAt),

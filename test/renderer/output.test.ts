@@ -11,6 +11,8 @@ import {
   footerClickAction,
   footerTokenAtX,
   formatTokenCount,
+  normalizeDashboardSnapshot,
+  normalizeVisibleCards,
   renderDashboard,
   renderInPlace,
   renderOutput,
@@ -622,14 +624,19 @@ test("provider stack stacks vertically under narrow width", () => {
 test("footer click tokens map to dashboard actions", () => {
   assert.equal(footerClickAction("r"), "refresh");
   assert.equal(footerClickAction("Refresh"), "refresh");
-  assert.equal(footerClickAction("1"), "hour");
-  assert.equal(footerClickAction("Hour"), "hour");
-  assert.equal(footerClickAction("2"), "day");
-  assert.equal(footerClickAction("Today"), "day");
-  assert.equal(footerClickAction("3"), "week");
-  assert.equal(footerClickAction("Week"), "week");
-  assert.equal(footerClickAction("4"), "month");
-  assert.equal(footerClickAction("Month"), "month");
+  // Numeric keys select visible card slots in order.
+  assert.deepEqual(footerClickAction("1"), { slot: 0 });
+  assert.deepEqual(footerClickAction("2"), { slot: 1 });
+  assert.deepEqual(footerClickAction("3"), { slot: 2 });
+  assert.deepEqual(footerClickAction("4"), { slot: 3 });
+  // Named period tokens select the card kind directly.
+  assert.deepEqual(footerClickAction("Hour"), { card: "hour" });
+  assert.deepEqual(footerClickAction("Today"), { card: "day" });
+  assert.deepEqual(footerClickAction("Week"), { card: "week" });
+  assert.deepEqual(footerClickAction("Month"), { card: "month" });
+  assert.deepEqual(footerClickAction("15m"), { card: "15m" });
+  assert.deepEqual(footerClickAction("30m"), { card: "30m" });
+  assert.deepEqual(footerClickAction("2h"), { card: "2h" });
   assert.equal(footerClickAction("p"), "projects");
   assert.equal(footerClickAction("Proj"), "projects");
   assert.equal(footerClickAction("Projects"), "projects");
@@ -701,4 +708,145 @@ test("breakdown tables toggle from settings and default to shown", () => {
   assert.match(legacy, /◆ Models ·/);
   assert.match(legacy, /◆ Providers ·/);
   assert.match(legacy, /◆ Projects ·/);
+});
+
+function trendBucket(from: Date, to: Date, input: number) {
+  return {
+    label: from.toISOString(),
+    from,
+    to,
+    totals: toUsageTotals({ input, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }),
+  };
+}
+
+function minuteBuckets(from: Date, count: number, minutes: number, input: number) {
+  return Array.from({ length: count }, (_, i) => {
+    const start = new Date(from.getTime() + i * minutes * 60 * 1000);
+    return trendBucket(start, new Date(start.getTime() + minutes * 60 * 1000), input);
+  });
+}
+
+function derivedFixture() {
+  // NOW 10:00 UTC: hour = [09:00,10:00), day = [00:00,24:00).
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  return {
+    capturedAt: NOW,
+    windows,
+    source: "message-scan",
+    records: [],
+    totalsByWindow: {},
+    trendsByWindow: {
+      hour: minuteBuckets(new Date("2026-09-02T09:00:00.000Z"), 60, 1, 1),
+      day: minuteBuckets(new Date("2026-09-02T00:00:00.000Z"), 288, 5, 2),
+    },
+    coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+}
+
+test("derived sub-windows sum parent trend buckets", () => {
+  const snapshot = normalizeDashboardSnapshot(derivedFixture());
+  // 15m = last 15 minute buckets x input 1; 30m = last 30.
+  assert.equal(snapshot.derived["15m"].totals.input, 15);
+  assert.equal(snapshot.derived["15m"].trends.length, 15);
+  assert.equal(snapshot.derived["30m"].totals.input, 30);
+  assert.equal(snapshot.derived["30m"].trends.length, 30);
+  // 2h = last 24 five-minute day buckets x input 2.
+  assert.equal(snapshot.derived["2h"].totals.input, 48);
+  assert.equal(snapshot.derived["2h"].trends.length, 24);
+  assert.equal(snapshot.derived["15m"].unmeasured, undefined);
+});
+
+test("derived sub-windows fall back to records when parent trends are absent", () => {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const input = {
+    capturedAt: NOW,
+    windows,
+    source: "message-scan",
+    records: [
+      recordFor("openai/gpt-5", new Date("2026-09-02T09:50:00.000Z"), 7),
+      recordFor("openai/gpt-5", new Date("2026-09-02T08:30:00.000Z"), 5),
+    ],
+    totalsByWindow: {},
+    coverage: { complete: true, sessionsDiscovered: 2, sessionsScanned: 2, sessionsSkipped: 0, pagesRead: 2, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const snapshot = normalizeDashboardSnapshot(input);
+  // Only the 09:50 record falls in [09:45,10:00).
+  assert.equal(snapshot.derived["15m"].totals.input, 7);
+  assert.equal(snapshot.derived["15m"].unmeasured, undefined);
+  // Both records fall in [08:00,10:00).
+  assert.equal(snapshot.derived["2h"].totals.input, 12);
+  // Breakdowns derive from the same records.
+  assert.equal(snapshot.derived["15m"].models.length, 1);
+  assert.equal(snapshot.derived["15m"].models[0]?.totals.input, 7);
+});
+
+test("derived sub-windows are unmeasured without trends or records", () => {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const input = {
+    capturedAt: NOW,
+    windows,
+    source: "stats",
+    records: [],
+    totalsByWindow: {},
+    coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const snapshot = normalizeDashboardSnapshot(input);
+  assert.equal(snapshot.derived["15m"].unmeasured, true);
+  assert.equal(snapshot.derived["2h"].unmeasured, true);
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 120, selectedWindow: "day", visibleCards: ["15m", "30m", "hour", "day"] });
+  assert.match(plain, /LAST 15 MINUTES/);
+  assert.match(plain, /n\/a/);
+});
+
+test("visible cards choose the rendered card set and footer labels", () => {
+  const input = derivedFixture();
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 120, selectedWindow: "day", visibleCards: ["15m", "30m", "hour", "day"] });
+  assert.match(plain, /LAST 15 MINUTES/);
+  assert.match(plain, /LAST 30 MINUTES/);
+  assert.doesNotMatch(plain, /THIS WEEK/);
+  assert.doesNotMatch(plain, /LAST MONTH/);
+  // Footer period labels follow the visible order.
+  assert.match(plain, /1.*15m.*2.*30m/);
+  // Legacy default keeps the four collected windows.
+  const legacy = renderDashboard(input, { isTTY: false, color: false, width: 120, selectedWindow: "day" });
+  assert.match(legacy, /THIS WEEK/);
+  assert.match(legacy, /LAST MONTH/);
+  assert.doesNotMatch(legacy, /LAST 15 MINUTES/);
+});
+
+test("selecting a derived card shows its trend and breakdown scope", () => {
+  const input = derivedFixture();
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 120, selectedWindow: "15m", visibleCards: ["15m", "30m", "hour", "day"] });
+  assert.match(plain, /Trend · last 15 minutes/);
+  assert.match(plain, /Models · LAST 15 MINUTES/);
+});
+
+test("normalizeVisibleCards enforces exactly four distinct cards", () => {
+  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
+  assert.deepEqual(normalizeVisibleCards(null), ["hour", "day", "week", "month"]);
+  assert.deepEqual(
+    normalizeVisibleCards(["15m", "15m", "bogus", "day", "week", "month", "30m", "2h", "hour"]),
+    ["15m", "day", "week", "month"],
+  );
+  assert.deepEqual(normalizeVisibleCards(["2h"]), ["2h", "hour", "day", "week"]);
+  assert.deepEqual(normalizeSettings({}).visibleCards, ["hour", "day", "week", "month"]);
+  assert.deepEqual(normalizeSettings({ visibleCards: ["15m", "30m", "2h", "day"] }).visibleCards, ["15m", "30m", "2h", "day"]);
+});
+
+test("settings panel lists the four card slots", () => {
+  const plain = renderDashboard(fixture(), {
+    isTTY: false,
+    color: false,
+    width: 100,
+    selectedWindow: "day",
+    settings: {
+      visible: true,
+      enabledProviders: ["opencode"],
+      refreshIntervalSeconds: 300,
+      focusedIndex: 6,
+      visibleCards: ["15m", "hour", "day", "week"],
+    },
+  });
+  assert.match(plain, /Card 1: 15m/);
+  assert.match(plain, /Card 4: Week/);
 });
