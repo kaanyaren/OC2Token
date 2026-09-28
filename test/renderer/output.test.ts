@@ -821,6 +821,65 @@ test("selecting a derived card shows its trend and breakdown scope", () => {
   assert.match(plain, /Models · LAST 15 MINUTES/);
 });
 
+test("derived splits aggregate bucket evidence and union records", () => {
+  const base = derivedFixture();
+  type BucketList = Array<Record<string, unknown>>;
+  const trends = base.trendsByWindow as unknown as Record<string, BucketList>;
+  // Attach stats splits to every hour bucket; records cover a file provider.
+  const codexRecord = createUsageRecord({
+    sessionID: "codex-session",
+    messageID: "codex-message",
+    createdAt: new Date("2026-09-02T09:50:00.000Z"),
+    model: "codex/model",
+    tokens: { input: 7, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    observedAt: NOW,
+    completeness: "final",
+    provider: "codex",
+  });
+  const withSplits = {
+    ...base,
+    records: [codexRecord],
+    trendsByWindow: {
+      hour: trends.hour.map((bucket) => ({
+        ...bucket,
+        providers: [{ name: "opencode-go", totals: toUsageTotals({ input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }) }],
+        models: [{ name: "space-bunny-free", provider: "opencode-go", totals: toUsageTotals({ input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }) }],
+      })),
+      day: trends.day,
+    },
+  };
+  const snapshot = normalizeDashboardSnapshot(withSplits);
+  const providers = snapshot.derived["15m"].providers;
+  const names = providers.map((entry) => entry.name).sort();
+  // Bucket evidence (opencode-go: 15 x input 1) unions record evidence (codex: 7).
+  assert.deepEqual(names, ["codex", "opencode-go"]);
+  assert.equal(providers.find((entry) => entry.name === "opencode-go")?.totals.input, 15);
+  assert.equal(providers.find((entry) => entry.name === "codex")?.totals.input, 7);
+  const models = snapshot.derived["15m"].models.map((entry) => entry.name).sort();
+  assert.deepEqual(models, ["codex/model", "space-bunny-free"]);
+});
+
+test("normalizeTrend retains per-bucket splits through the cache path", () => {
+  const base = derivedFixture();
+  type BucketList = Array<Record<string, unknown>>;
+  const trends = base.trendsByWindow as unknown as Record<string, BucketList>;
+  const withSplits = {
+    ...base,
+    trendsByWindow: {
+      hour: trends.hour.slice(0, 1).map((bucket) => ({
+        ...bucket,
+        providers: [{ name: "opencode-go", totals: toUsageTotals({ input: 3, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }) }],
+      })),
+    },
+  };
+  // Simulate a cache round-trip: normalize must not drop the splits.
+  const once = normalizeDashboardSnapshot(withSplits);
+  const twice = normalizeDashboardSnapshot(JSON.parse(JSON.stringify(once)));
+  void twice;
+  assert.equal(once.windows.hour.trends[0]?.providers?.[0]?.name, "opencode-go");
+  assert.equal(once.windows.hour.trends[0]?.providers?.[0]?.totals.input, 3);
+});
+
 test("normalizeVisibleCards enforces exactly four distinct cards", () => {
   assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
   assert.deepEqual(normalizeVisibleCards(null), ["hour", "day", "week", "month"]);

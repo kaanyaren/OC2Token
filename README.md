@@ -166,7 +166,7 @@ oc2token --no-color     # or NO_COLOR=1 for plain output
 
 Settings persist under the cache directory (`~/Library/Caches/oc2token` on macOS by default; `$XDG_CACHE_HOME/oc2token` when `XDG_CACHE_HOME` is set, otherwise `~/Library/Caches/oc2token` — see `src/application.ts:47-50`). Override with `--cache-dir`. At least one provider must stay enabled.
 
-**Top cards.** Four cards are shown; the Settings panel chooses which windows occupy the four slots (`hour`, `day`, `week`, `month` by default, plus dashboard-only `15m`, `30m`, `2h`). The short ranges are derived from already-collected data and never change collection, JSON, table, or CLI output: a card with no evidence in range shows `n/a`, and its model/provider/project splits come from records only, so a stats-only provider is absent from a short-range split rather than fabricated.
+**Top cards.** Four cards are shown; the Settings panel chooses which windows occupy the four slots (`hour`, `day`, `week`, `month` by default, plus dashboard-only `15m`, `30m`, `2h`). The short ranges are derived from already-collected data and never change collection, JSON, table, or CLI output: a card with no evidence in range shows `n/a`. Short-range model/provider splits combine per-bucket stats evidence with record evidence; project splits come from records only, and a stats-only provider is absent from a project split rather than fabricated.
 
 **Theme.** Purple carries structure, orange carries activity and focus, cyan carries inputs. Respects `NO_COLOR` and `--no-color`.
 

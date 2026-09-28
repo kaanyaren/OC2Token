@@ -37,6 +37,9 @@ export interface TrendBucket {
   readonly totals: UsageTotals;
   readonly from?: DateLike;
   readonly to?: DateLike;
+  /** Per-bucket splits when the source reported them (stats buckets). */
+  readonly models?: ReadonlyArray<BreakdownTotal>;
+  readonly providers?: ReadonlyArray<BreakdownTotal>;
 }
 
 export interface BreakdownTotal {
@@ -354,11 +357,18 @@ function normalizeTrend(value: unknown): TrendBucket | null {
   const source = asRecord(value);
   const label = asString(source.label ?? source.name ?? source.bucket, "");
   if (!label) return null;
+  // Retain per-bucket splits (stats buckets carry them; record-built buckets
+  // do not). Dropped here, short derived ranges lose stats providers on every
+  // cache read — the splits must survive normalization, not just collection.
+  const models = Array.isArray(source.models) ? normalizeBreakdown(source.models) : undefined;
+  const providers = Array.isArray(source.providers) ? normalizeBreakdown(source.providers) : undefined;
   return {
     label,
     totals: totalsFor(source.totals ?? source.usage ?? source),
     ...(source.from === undefined ? {} : { from: asDate(source.from) ?? undefined }),
     ...(source.to === undefined ? {} : { to: asDate(source.to) ?? undefined }),
+    ...(models === undefined || models.length === 0 ? {} : { models }),
+    ...(providers === undefined || providers.length === 0 ? {} : { providers }),
   };
 }
 
@@ -709,6 +719,43 @@ function sumTotals(values: ReadonlyArray<UsageTotals>): UsageTotals {
   return totals as unknown as UsageTotals;
 }
 
+/**
+ * Union two split lists by entry name, summing totals and costs. Bucket
+ * splits (stats sources) and record splits (file sources) describe disjoint
+ * providers — merging both cannot double-count — while same-name entries
+ * from overlapping evidence sum honestly. Missing costs are treated as zero
+ * only when the other side has one, matching the application merge.
+ */
+function unionBreakdowns(
+  lists: ReadonlyArray<ReadonlyArray<BreakdownTotal>>,
+): BreakdownTotal[] {
+  const merged = new Map<string, { totals: UsageTotals; cost: number | undefined; provider: string | undefined }>();
+  for (const list of lists) {
+    for (const entry of list) {
+      const current = merged.get(entry.name);
+      if (current === undefined) {
+        merged.set(entry.name, { totals: entry.totals, cost: entry.cost, provider: entry.provider });
+        continue;
+      }
+      current.totals = sumTotals([current.totals, entry.totals]);
+      current.cost = current.cost === undefined && entry.cost === undefined
+        ? undefined
+        : Math.round(((current.cost ?? 0) + (entry.cost ?? 0)) * 1_000_000) / 1_000_000;
+      if (current.provider === undefined) current.provider = entry.provider;
+    }
+  }
+  return [...merged.entries()]
+    .map(([name, group]) => ({
+      name,
+      ...(group.provider === undefined ? {} : { provider: group.provider }),
+      totals: group.totals,
+      ...(group.cost === undefined ? {} : { cost: group.cost }),
+    }))
+    .sort((left, right) =>
+      right.totals.recorded_total - left.totals.recorded_total || left.name.localeCompare(right.name),
+    );
+}
+
 interface DerivedSpec {
   readonly kind: DerivedCardKind;
   /** Range length in minutes, anchored at the parent window's end. */
@@ -734,9 +781,9 @@ function bucketStart(bucket: TrendBucket): number | null {
  * Derive a dashboard-only sub-window from already-collected data. Totals and
  * trends prefer the parent window's trend buckets (consistent across stats
  * and record sources, since mergeTrends/deriveTrends aggregate all sources);
- * records are the fallback when the parent has no buckets. Breakdowns are
- * always record-derived, so a stats-only provider is honestly absent from a
- * derived split rather than fabricated. Returns unmeasured when neither
+ * records are the fallback when the parent has no buckets. Splits union
+ * bucket evidence with record evidence; projects stay records-only because
+ * stats never reports them per bucket. Returns unmeasured when neither
  * source has evidence in range.
  *
  * `now` is the capture instant (the rolling hour's end), NOT the parent
@@ -791,8 +838,14 @@ function deriveSubWindow(
   // cover the parent-bucket gap. Either way totals sum the trends shown.
   const trends = inRange.length > 0 ? inRange : deriveTrends(root, spec.parent, synthWindow);
   const totals = sumTotals(trends.map((bucket) => bucket.totals));
-  const models = recordsAsBreakdown(root, "model", synthWindow);
-  const providers = recordsAsBreakdown(root, "provider", synthWindow);
+  // Splits union bucket evidence (stats providers) with record evidence
+  // (file providers). Bucket splits alone would erase record providers in a
+  // mixed range; records alone would erase stats providers. Projects stay
+  // records-only: stats never reports them per bucket.
+  const bucketModels = inRange.flatMap((bucket) => bucket.models ?? []);
+  const bucketProviders = inRange.flatMap((bucket) => bucket.providers ?? []);
+  const models = unionBreakdowns([bucketModels, recordsAsBreakdown(root, "model", synthWindow)]);
+  const providers = unionBreakdowns([bucketProviders, recordsAsBreakdown(root, "provider", synthWindow)]);
   const projects = recordsAsBreakdown(root, "project", synthWindow);
   const cost = estimatedCostForBreakdowns(models, true);
   return {

@@ -49,6 +49,15 @@ export interface UsageStatsRange {
 
 export interface UsageTrendBucket extends UsageBucket {
   readonly totals: UsageTotals;
+  /**
+   * Per-bucket splits, retained when the source reports them (OpenCode stats
+   * buckets do; record-derived buckets do not). Lets short derived ranges
+   * show honest provider/model splits without extra API calls. Projects are
+   * never per-bucket: stats projects are per-window calls, so a derived
+   * project split would cost N×M requests.
+   */
+  readonly models?: ReadonlyArray<UsageBreakdown>;
+  readonly providers?: ReadonlyArray<UsageBreakdown>;
 }
 
 export type UsageTrendsByWindow = Readonly<

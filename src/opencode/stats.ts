@@ -149,11 +149,17 @@ async function collectTrendBuckets(
       };
       try {
         const result = await transport.getSessionStats(query, options);
+        // Retain the bucket's own splits: short derived ranges aggregate
+        // these instead of forcing a records-only split that would erase
+        // stats providers. No extra requests — the payload is already here.
+        const enriched = withStatsBreakdownCosts(result);
         results[index] = {
           label: bucket.label,
           from: new Date(bucket.from.getTime()),
           to: new Date(bucket.to.getTime()),
           totals: result.totals,
+          ...(enriched.models === undefined ? {} : { models: enriched.models }),
+          ...(enriched.providers === undefined ? {} : { providers: enriched.providers }),
         };
       } catch (error) {
         if (isCancellationError(error) || (error instanceof DomainError && error.code === "cancelled")) {

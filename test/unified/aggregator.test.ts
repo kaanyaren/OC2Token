@@ -6,8 +6,10 @@ import test from "node:test";
 
 import {
   createUsageRecord,
+  createUsageTrendBuckets,
   createUsageWindows,
   sumUsageRecords,
+  toUsageTotals,
   type CollectionRequest,
   type CollectionResult,
   type UsageSource,
@@ -216,4 +218,42 @@ test("UnifiedUsageSource parallel oracle: serial sum equals parallel-equivalent"
     const manual = sumUsageRecords(result.records, w);
     assert.deepEqual(manual, result.totalsByWindow[w.kind as keyof typeof result.totalsByWindow]);
   }
+});
+
+test("mergeTrends carries per-bucket splits from exact supplied buckets", async () => {
+  const wins = windows();
+  const planned = createUsageTrendBuckets(wins[0]!);
+  const split = (name: string, input: number) => ({
+    name,
+    totals: toUsageTotals({ input, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }),
+  });
+  const statsResult: CollectionResult = {
+    capturedAt: NOW,
+    windows: wins,
+    source: "stats",
+    records: [],
+    totalsByWindow: {},
+    trendsByWindow: {
+      hour: planned.map((bucket) => ({
+        ...bucket,
+        totals: toUsageTotals({ input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }),
+        providers: [split("opencode-go", 10)],
+        models: [split("space-bunny-free", 10)],
+      })),
+    },
+    coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const unified = new UnifiedUsageSource(
+    sourceReturning(statsResult),
+    sourceReturning(emptyProviderResult("codex")),
+    sourceReturning(emptyProviderResult("antigravity")),
+  );
+  const result = await unified.collect(request());
+  const buckets = result.trendsByWindow?.hour ?? [];
+  assert.ok(buckets.length > 0);
+  // Splits survive the merge, scaled by bucket count.
+  const first = buckets[0]!;
+  assert.equal(first.providers?.[0]?.name, "opencode-go");
+  assert.equal(first.providers?.[0]?.totals.input, 10);
+  assert.equal(first.models?.[0]?.name, "space-bunny-free");
 });

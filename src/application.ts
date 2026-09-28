@@ -252,19 +252,29 @@ function mergeTrends(
     const planned = createUsageTrendBuckets(window);
     const buckets: UsageTrendBucket[] = planned.map((bucket, index) => {
       let totals = emptyUsageTotals();
+      const modelSplits: Array<UsageBreakdown> = [];
+      const providerSplits: Array<UsageBreakdown> = [];
       for (const { result } of successful) {
         const supplied = result.trendsByWindow?.[window.kind]?.[index];
         const exact = supplied !== undefined &&
           supplied.from.getTime() === bucket.from.getTime() &&
           supplied.to.getTime() === bucket.to.getTime();
-        const sourceTotals = exact
-          ? supplied.totals
-          : sumUsageRecords(result.records, {
-              ...window,
-              from: new Date(bucket.from.getTime()),
-              to: new Date(bucket.to.getTime()),
-              label: bucket.label,
-            });
+        if (exact) {
+          totals = addUsageTotals(totals, supplied.totals);
+          // Carry per-bucket splits so short derived ranges can show
+          // stats providers. Record sources supply no splits here; the
+          // renderer unions these with record-derived splits instead of
+          // merging both, which would double-count shared records.
+          if (supplied.models !== undefined) modelSplits.push(...supplied.models);
+          if (supplied.providers !== undefined) providerSplits.push(...supplied.providers);
+          continue;
+        }
+        const sourceTotals = sumUsageRecords(result.records, {
+          ...window,
+          from: new Date(bucket.from.getTime()),
+          to: new Date(bucket.to.getTime()),
+          label: bucket.label,
+        });
         totals = addUsageTotals(totals, sourceTotals);
       }
       return {
@@ -272,6 +282,8 @@ function mergeTrends(
         from: new Date(bucket.from.getTime()),
         to: new Date(bucket.to.getTime()),
         totals,
+        ...(modelSplits.length === 0 ? {} : { models: mergeBreakdowns(modelSplits) }),
+        ...(providerSplits.length === 0 ? {} : { providers: mergeBreakdowns(providerSplits) }),
       };
     });
     merged[window.kind] = buckets;
