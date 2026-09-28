@@ -101,6 +101,18 @@ export interface DashboardRenderOptions {
   readonly previousLineCount?: number;
   readonly settings?: DashboardSettingsView;
   readonly projects?: DashboardProjectsView;
+  /**
+   * Per-table collapse state. A table collapses when it has more than
+   * COLLAPSE_THRESHOLD rows and its flag is true. Ephemeral view state —
+   * resets to collapsed on each refresh, not persisted.
+   */
+  readonly collapsedTables?: {
+    readonly models?: boolean;
+    readonly providers?: boolean;
+    readonly projects?: boolean;
+  };
+  /** Which breakdown table has keyboard focus (when settings panel is closed). */
+  readonly focusedTable?: "models" | "providers" | "projects";
 }
 
 export interface OutputOptions extends DashboardRenderOptions {

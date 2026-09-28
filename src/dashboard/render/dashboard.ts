@@ -404,6 +404,9 @@ function breakdownColumnWidths(values: ReadonlyArray<BreakdownTotal>): Breakdown
   };
 }
 
+/** Rows shown before a breakdown table collapses. Fixed by design. */
+export const COLLAPSE_THRESHOLD = 3;
+
 function renderBreakdown(
   title: string,
   values: ReadonlyArray<BreakdownTotal>,
@@ -411,6 +414,8 @@ function renderBreakdown(
   width: number,
   accent: "purple" | "orange" | "cyan",
   columnWidths: BreakdownColumnWidths,
+  collapsed = false,
+  focused = false,
 ): string[] {
   // Token columns intentionally merge sub-components for TTY width:
   // Out = output + reasoning, Cache = cacheRead + cacheWrite (same as
@@ -419,11 +424,21 @@ function renderBreakdown(
   // Row cap is DASHBOARD_ROW_CAP (12) for TTY height; the piped table uses
   // TABLE_ROW_CAP (20) for logs. Different caps are intentional — dashboard
   // prioritizes fitting without scroll, table prioritizes completeness.
-  const lines = [panelHeading(title, width, color, accent)];
+  const collapsible = values.length > COLLAPSE_THRESHOLD;
+  const isCollapsed = collapsible && collapsed;
+  const focusMarker = focused ? "▶ " : "";
+  const headingTitle = collapsible
+    ? `${focusMarker}${title} ${isCollapsed ? "▸" : "▾"}`
+    : focused
+      ? `${focusMarker}${title}`
+      : title;
+  const lines = [panelHeading(headingTitle, width, color, accent)];
   if (values.length === 0) {
     return [...lines, width < 32 ? "  (none)" : "  No breakdown data recorded."];
   }
-  const visible = values.slice(0, DASHBOARD_ROW_CAP);
+  const visible = isCollapsed
+    ? values.slice(0, COLLAPSE_THRESHOLD)
+    : values.slice(0, DASHBOARD_ROW_CAP);
   const isProvider = title.toLowerCase().includes("provider");
   const showTokenDetails = width >= 70;
   const showCost = width >= 32;
@@ -484,8 +499,12 @@ function renderBreakdown(
       ));
     }
   }
-  if (values.length > visible.length) {
+  if (isCollapsed) {
+    lines.push(`  +${values.length - visible.length} more · click to expand`);
+  } else if (values.length > visible.length) {
     lines.push(`  +${values.length - visible.length} more`);
+  } else if (collapsible) {
+    lines.push(`  click to collapse`);
   }
   return lines;
 }
@@ -980,12 +999,14 @@ export function renderDashboard(
     ...selectedWindow.providers,
     ...selectedWindow.projects,
   ]);
-  lines.push(...renderBreakdown(`Models · ${cardTitle(selected)}`, selectedWindow.models, color, width, "purple", breakdownWidths));
+  const collapsed = options.collapsedTables ?? {};
+  const focused = options.focusedTable;
+  lines.push(...renderBreakdown(`Models · ${cardTitle(selected)}`, selectedWindow.models, color, width, "purple", breakdownWidths, collapsed.models === true, focused === "models"));
   if (options.settings?.showProvidersTable !== false) {
-    lines.push(...renderBreakdown(`Providers · ${cardTitle(selected)}`, selectedWindow.providers, color, width, "orange", breakdownWidths));
+    lines.push(...renderBreakdown(`Providers · ${cardTitle(selected)}`, selectedWindow.providers, color, width, "orange", breakdownWidths, collapsed.providers === true, focused === "providers"));
   }
   if (options.settings?.showProjectsTable !== false) {
-    lines.push(...renderBreakdown(`Projects · ${cardTitle(selected)}`, selectedWindow.projects, color, width, "cyan", breakdownWidths));
+    lines.push(...renderBreakdown(`Projects · ${cardTitle(selected)}`, selectedWindow.projects, color, width, "cyan", breakdownWidths, collapsed.projects === true, focused === "projects"));
   }
   if (snapshot.coverage.errors.length > 0) {
     lines.push("");

@@ -460,6 +460,64 @@ test("trend graph remains ANSI-free with no-color and colored when enabled", () 
   assert.match(plain, /Trend · today/);
 });
 
+function manyModelFixture(count: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const windows = Object.values(createUsageWindows(NOW, "UTC"));
+  const records = Array.from({ length: count }, (_, i) =>
+    createUsageRecord({
+      sessionID: `session-${i}`,
+      messageID: `message-${i}`,
+      createdAt: new Date(`2026-09-02T09:${String(50 + i).padStart(2, "0")}:00.000Z`),
+      model: `provider/model-${i}`,
+      tokens: { input: 10, output: 20, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+      observedAt: NOW,
+      completeness: "final",
+    }),
+  );
+  return {
+    capturedAt: NOW,
+    windows,
+    source: "message-scan",
+    records,
+    totalsByWindow: {},
+    coverage: { complete: true, sessionsDiscovered: count, sessionsScanned: count, sessionsSkipped: 0, pagesRead: count, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+    ...overrides,
+  };
+}
+
+test("breakdown table collapses to 3 rows with a more hint when over threshold", () => {
+  const input = manyModelFixture(7);
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 100, selectedWindow: "day", collapsedTables: { models: true, providers: true, projects: true } });
+  assert.match(plain, /Models · TODAY.*▸/);
+  assert.match(plain, /\+4 more · click to expand/);
+  // Only 3 model rows should be visible (plus header lines).
+  const modelRows = plain.split("\n").filter((line) => /model-\d/.test(line));
+  assert.equal(modelRows.length, 3);
+});
+
+test("breakdown table expands to show all rows when collapsed is false", () => {
+  const input = manyModelFixture(7);
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 100, selectedWindow: "day", collapsedTables: { models: false, providers: true, projects: true } });
+  assert.match(plain, /Models · TODAY.*▾/);
+  assert.doesNotMatch(plain, /click to expand/);
+  const modelRows = plain.split("\n").filter((line) => /model-\d/.test(line));
+  assert.equal(modelRows.length, 7);
+});
+
+test("breakdown table at or below threshold renders normally with no collapse UI", () => {
+  const input = manyModelFixture(3);
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 100, selectedWindow: "day", collapsedTables: { models: true, providers: true, projects: true } });
+  assert.doesNotMatch(plain, /▸|▾/);
+  assert.doesNotMatch(plain, /click to expand/);
+  const modelRows = plain.split("\n").filter((line) => /model-\d/.test(line));
+  assert.equal(modelRows.length, 3);
+});
+
+test("focused table header shows a focus marker", () => {
+  const input = manyModelFixture(5);
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 100, selectedWindow: "day", focusedTable: "models" });
+  assert.match(plain, /▶ Models ·/);
+});
+
 test("JSON snapshot uses schemaVersion 4 and exposes totalsByProvider per window", () => {
   const json = toJSONSnapshot(fixture());
   assert.equal(json.schemaVersion, 4);

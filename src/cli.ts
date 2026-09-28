@@ -465,6 +465,12 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   let projectsVisible = false;
   let running = true;
 
+  // Breakdown table collapse state. Ephemeral — resets to collapsed on each
+  // refresh so new data starts compact. Not persisted.
+  let collapsedTables = { models: true, providers: true, projects: true };
+  // Which breakdown table has keyboard focus (when settings panel is closed).
+  let focusedTable: "models" | "providers" | "projects" = "models";
+
   // ANSI-stripped lines of the last drawn frame for mouse hit-testing.
   // The cursor-home redraw paints frame line N on terminal row N (1-based).
   let frameLines: string[] = [];
@@ -559,6 +565,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         showProjectsTable: settingsState.showProjectsTable,
         focusedIndex: settingsState.focusedIndex,
       },
+      collapsedTables: { ...collapsedTables },
+      ...(settingsState.visible ? {} : { focusedTable }),
       ...(projectsVisible ? { projects: { visible: true } } : {}),
     });
     frameLines = frame.split("\n").map((line) => stripAnsi(line));
@@ -576,7 +584,12 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     io.stdout.write(`\n${redraw.cleanup({ isTTY: true, ansi: true })}\n`);
   };
 
-  coordinator.subscribe(() => draw());
+  coordinator.subscribe(() => {
+    // Collapse state is ephemeral: reset to collapsed on each refresh so new
+    // data starts compact. The user can re-expand within the session.
+    collapsedTables = { models: true, providers: true, projects: true };
+    draw();
+  });
   const onSignal = () => { void stop(); };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
@@ -687,6 +700,16 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     if (clickedLine !== undefined && (clickedLine.includes(GITHUB_URL) || clickedLine.includes("Kaan Yaren"))) {
       openGithubPage();
       return;
+    }
+    // Breakdown table headers toggle collapse. Only when no panel is open.
+    if (!settingsState.visible && !projectsVisible && clickedLine !== undefined) {
+      const tableMatch = clickedLine.match(/Models ·|Providers ·|Projects ·/);
+      if (tableMatch !== null) {
+        const key = tableMatch[0].split(" ")[0]!.toLowerCase() as "models" | "providers" | "projects";
+        collapsedTables[key] = !collapsedTables[key];
+        draw();
+        return;
+      }
     }
     // Footer tokens (below the Status line, skipping panels and credit).
     const statusIdx = frameLines.findIndex((line) => line.includes("Status:"));
@@ -982,33 +1005,45 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === " ") {
-          if (settingsState.focusedIndex >= 0 && settingsState.focusedIndex <= 2) {
-            const prov = ALL_KINDS[settingsState.focusedIndex]!;
-            if (settingsState.enabledProviders.has(prov)) {
-              if (settingsState.enabledProviders.size > 1) {
-                settingsState.enabledProviders.delete(prov);
+          if (settingsState.visible) {
+            if (settingsState.focusedIndex >= 0 && settingsState.focusedIndex <= 2) {
+              const prov = ALL_KINDS[settingsState.focusedIndex]!;
+              if (settingsState.enabledProviders.has(prov)) {
+                if (settingsState.enabledProviders.size > 1) {
+                  settingsState.enabledProviders.delete(prov);
+                  applySettings();
+                  draw();
+                }
+              } else {
+                settingsState.enabledProviders.add(prov);
                 applySettings();
                 draw();
               }
-            } else {
-              settingsState.enabledProviders.add(prov);
-              applySettings();
+            } else if (settingsState.focusedIndex === 3) {
+              settingsState.showProvidersTable = !settingsState.showProvidersTable;
+              persistCurrentSettings();
+              draw();
+            } else if (settingsState.focusedIndex === 4) {
+              settingsState.showProjectsTable = !settingsState.showProjectsTable;
+              persistCurrentSettings();
               draw();
             }
-          } else if (settingsState.focusedIndex === 3) {
-            settingsState.showProvidersTable = !settingsState.showProvidersTable;
-            persistCurrentSettings();
-            draw();
-          } else if (settingsState.focusedIndex === 4) {
-            settingsState.showProjectsTable = !settingsState.showProjectsTable;
-            persistCurrentSettings();
+          } else {
+            // Settings panel closed: space toggles the focused table's collapse.
+            collapsedTables[focusedTable] = !collapsedTables[focusedTable];
             draw();
           }
           i += 1;
           continue;
         }
         if (key === "\t" || key === "\u0009") {
-          settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 6;
+          if (settingsState.visible) {
+            settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 6;
+          } else {
+            const order: Array<"models" | "providers" | "projects"> = ["models", "providers", "projects"];
+            const idx = order.indexOf(focusedTable);
+            focusedTable = order[(idx + 1) % order.length]!;
+          }
           draw();
           i += 1;
           continue;
