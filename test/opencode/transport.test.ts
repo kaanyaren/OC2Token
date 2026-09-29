@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DomainError,
   createUsageWindow,
@@ -7,6 +10,7 @@ import {
 import {
   OpenCode2Transport,
   connectOpenCode,
+  resolveServeCommand,
   isStatsRangeMismatch,
   type OpenCodeClientLike,
 } from "../../src/opencode/index.js";
@@ -230,7 +234,34 @@ test("uses injected Service.discover/ensure and reports health metadata", async 
   });
   assert.equal(discovered, 1);
   assert.equal(ensured, 1);
-  assert.deepEqual(command, ["opencode2", "serve", "--service"]);
+  // The executable is resolved to an absolute path so a PATH-less launch
+  // (dashboard, GUI) still finds it; see resolveServeCommand.
+  assert.equal(command?.length, 3);
+  assert.deepEqual(command?.slice(1), ["serve", "--service"]);
+  assert.match(String(command?.[0]), /opencode2?$/);
   assert.equal(connection.health.version, "beta");
   assert.equal(connection.health.fingerprint.length, 24);
+});
+
+test("resolveServeCommand finds the V2 executable when PATH lacks it", () => {
+  // Reproduces the GUI/dashboard launch: PATH has no install dir, but the
+  // official macOS installer put the executable in ~/.opencode/bin.
+  const home = mkdtempSync(join(tmpdir(), "oc2token-home-"));
+  mkdirSync(join(home, ".opencode", "bin"), { recursive: true });
+  writeFileSync(join(home, ".opencode", "bin", "opencode2"), "#!/bin/sh\n");
+  const path = process.env.PATH;
+  const realHome = process.env.HOME;
+  process.env.PATH = "";
+  process.env.HOME = home;
+  try {
+    assert.deepEqual(resolveServeCommand(), [
+      join(home, ".opencode", "bin", "opencode2"),
+      "serve",
+      "--service",
+    ]);
+  } finally {
+    process.env.PATH = path;
+    process.env.HOME = realHome;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

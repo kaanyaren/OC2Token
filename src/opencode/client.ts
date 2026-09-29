@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
   Service,
   headers as serviceHeaders,
@@ -187,11 +189,35 @@ function mergeDiscoveryOptions(options: ConnectionOptions): DiscoverOptions {
   };
 }
 
+/**
+ * Resolve the V2 executable to an absolute path.
+ *
+ * `opencode2` is only a PATH shim in some installs (the official macOS
+ * installer drops it in `~/.opencode/bin`, Homebrew in `/opt/homebrew/bin`),
+ * and OC2Token is frequently launched from a GUI/dashboard context whose PATH
+ * has neither. Spawning the bare name then fails with ENOENT and no service
+ * ever starts, so probe PATH ourselves and then the well-known install dirs.
+ */
+export function resolveServeCommand(): string[] {
+  const home = process.env.HOME;
+  const dirs = [...(process.env.PATH ?? "").split(":")];
+  if (home !== undefined && home !== "") dirs.push(`${home}/.opencode/bin`);
+  for (const name of ["opencode2", "opencode"]) {
+    for (const dir of dirs) {
+      if (dir !== "") {
+        const candidate = join(dir, name);
+        if (existsSync(candidate)) return [candidate, "serve", "--service"];
+      }
+    }
+  }
+  return ["opencode2", "serve", "--service"];
+}
+
 function mergeEnsureOptions(options: ConnectionOptions): EnsureOptions {
   return {
     // The beta client's own default still says `opencode`; OC2Token targets
     // the V2 executable explicitly unless the caller supplies a command.
-    command: ["opencode2", "serve", "--service"],
+    command: resolveServeCommand(),
     ...options.ensureOptions,
     ...(options.version === undefined ? {} : { version: options.version }),
   };
