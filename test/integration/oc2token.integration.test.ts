@@ -198,12 +198,12 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
   assert.equal(result.records.length, 0);
   assert.deepEqual(transport.statsCalls, ["hour", "day", "week", "month"]);
   assert.deepEqual(transport.trendCalls, [
-    ...Array.from({ length: 60 }, () => "hour" as const),
+    ...Array.from({ length: 120 }, () => "hour" as const),
      ...Array.from({ length: 288 }, () => "day" as const),
     ...Array.from({ length: 7 }, () => "week" as const),
     ...Array.from({ length: 30 }, () => "month" as const),
   ]);
-  assert.equal(result.trendsByWindow?.hour?.length, 60);
+  assert.equal(result.trendsByWindow?.hour?.length, 120);
   assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.equal(result.trendsByWindow?.week?.length, 7);
   assert.equal(result.trendsByWindow?.month?.length, 30);
@@ -376,7 +376,7 @@ test("UnifiedUsageSource retains OpenCode stats totals and trends", async () => 
 
   assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);
-  assert.equal(result.trendsByWindow?.hour?.length, 60);
+  assert.equal(result.trendsByWindow?.hour?.length, 120);
   assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.equal(result.trendsByWindow?.week?.length, 7);
 });

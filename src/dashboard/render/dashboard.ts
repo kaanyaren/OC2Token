@@ -251,7 +251,7 @@ function composeCards(cards: string[][], gap = 2): string[] {
   );
 }
 
-const HEADER_LINES = 3;
+const HEADER_LINES = 2;
 const CARD_LINES = 6;
 const CARD_GAP = 2;
 const FOUR_CARD_LAYOUT_MIN_WIDTH = CARD_MIN_WIDTH * 4 + CARD_GAP * 3;
@@ -304,16 +304,13 @@ export function getCardHitRegions(
 }
 
 function renderHeader(color: boolean, width: number): string[] {
-  const compact = width < 70;
   const identity = width < 28
     ? `${themeOrange("◈", color, true)} ${emphasis(themePurple("OC2", color, true), color)} ${themePurple("// TOKENS", color)}`
     : `${themeOrange("◈", color, true)} ${emphasis(themePurple("OC2TOKEN", color, true), color)}  ${themePurple("// USAGE CONSOLE", color)}`;
-  const title = compact ? "OC2Token Usage" : "OpenCode 2 Token Usage";
   // No trailing blank line: the top cards start directly under the rule to
   // keep vertical spacing tight (HEADER_LINES must match this length).
   return [
     identity,
-    emphasis(themePurple(truncate(title, width), color, true), color),
     themePurple("─".repeat(width), color),
   ];
 }
@@ -368,7 +365,16 @@ function renderTrend(
   const max = Math.max(...trend.map((bucket) => bucket.totals.recorded_total), 0);
   if (max === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
 
-  const graphWidth = Math.max(8, width - 4);
+  const levels = 5;
+  // Y axis: each row is labeled with its threshold value, zero on the axis
+  // rule. Labels use the compact count so the axis stays narrow.
+  const levelLabels = Array.from({ length: levels }, (_, row) =>
+    formatTokenCount((max * (levels - row)) / levels),
+  );
+  const axisWidth = Math.max(...levelLabels.map((label) => [...label].length));
+  const axis = (label: string): string =>
+    `  ${themePurple(label.padStart(axisWidth), color)} ${themePurple("│", color)}`;
+  const graphWidth = Math.max(8, width - 4 - axisWidth - 1);
   const points =
     trend.length <= graphWidth
       ? Array.from({ length: graphWidth }, (_, index) => {
@@ -384,7 +390,6 @@ function renderTrend(
             totals: trend.slice(start, end).reduce(sumTrendTotals, zeroTotals()),
           };
         });
-  const levels = 5;
   return [
     panelHeading(title, width, color),
     ...Array.from({ length: levels }, (_, row) => {
@@ -393,10 +398,10 @@ function renderTrend(
         const filled = point.totals.recorded_total > 0 && point.totals.recorded_total / max >= level / levels;
         return filled ? themeOrange("█", color, true) : themePurple("·", color);
       }).join("");
-      return `  ${cells}`;
+      return `${axis(levelLabels[row]!)}${cells}`;
     }),
-    `  ${themePurple("─".repeat(graphWidth), color)}`,
-    `  ${themePurple(graphLabels(points, graphWidth), color)}`,
+    `${axis("0")}${themePurple("─".repeat(graphWidth), color)}`,
+    `  ${" ".repeat(axisWidth)} ${themePurple(graphLabels(points, graphWidth), color)}`,
   ];
 }
 

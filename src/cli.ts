@@ -898,7 +898,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       if (value.startsWith("\u001b[", i)) {
         if (value.startsWith("\u001b[Z", i)) {
           if (settingsState.visible) {
-            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 10;
+            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 10) % 10;
             draw();
           } else {
             selectCard(prevCard());
@@ -917,7 +917,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const code = value[i + 2];
           if (settingsState.visible) {
             if (code === "A") {
-              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 6) % 10;
+              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 10) % 10;
               draw();
               i += 3;
               continue;

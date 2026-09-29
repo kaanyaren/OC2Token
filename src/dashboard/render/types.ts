@@ -501,12 +501,14 @@ function deriveTrends(
 ): ReadonlyArray<TrendBucket> {
   if (!Array.isArray(root.records)) return [];
   const duration = window.to.getTime() - window.from.getTime();
+  // Mirrors createUsageTrendBuckets: 30s hour buckets keep record-built
+  // trends interchangeable with collected ones for short derived ranges.
   const bucketDuration = kind === "hour"
-    ? 60 * 1000
+    ? 30 * 1000
     : kind === "day"
       ? 5 * 60 * 1000
       : 24 * 60 * 60 * 1000;
-  const maxBucketCount = kind === "hour" ? 60 : kind === "day" ? 288 : 30;
+  const maxBucketCount = kind === "hour" ? 120 : kind === "day" ? 288 : 30;
   const bucketCount = Math.max(1, Math.min(maxBucketCount, Math.ceil(duration / bucketDuration)));
   const values = Array.from({ length: bucketCount }, (_, index) => {
     const from = new Date(window.from.getTime() + index * bucketDuration);

@@ -115,7 +115,8 @@ test("partial and stale snapshots remain visibly honest", () => {
 test("interactive header keeps the top bar focused on the app identity", () => {
   const output = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
   const topBar = output.slice(0, output.indexOf("◆ Trend"));
-  assert.match(topBar, /OC2TOKEN|OpenCode 2 Token Usage/);
+  assert.match(topBar, /OC2TOKEN/);
+  assert.doesNotMatch(topBar, /OpenCode 2 Token Usage/);
   assert.doesNotMatch(topBar, /Source:|Version:|Window:|Timezone:|Status:/);
   assert.match(output, /Status: COMPLETE/);
 });
@@ -772,7 +773,7 @@ function minuteBuckets(from: Date, count: number, minutes: number, input: number
 }
 
 function derivedFixture() {
-  // NOW 10:00 UTC: hour = [09:00,10:00), day = [00:00,24:00).
+  // NOW 10:00 UTC: hour = [09:00,10:00) in 30s buckets, day = [00:00,24:00).
   const windows = Object.values(createUsageWindows(NOW, "UTC"));
   return {
     capturedAt: NOW,
@@ -781,7 +782,7 @@ function derivedFixture() {
     records: [],
     totalsByWindow: {},
     trendsByWindow: {
-      hour: minuteBuckets(new Date("2026-09-02T09:00:00.000Z"), 60, 1, 1),
+      hour: minuteBuckets(new Date("2026-09-02T09:00:00.000Z"), 120, 0.5, 1),
       day: minuteBuckets(new Date("2026-09-02T00:00:00.000Z"), 288, 5, 2),
     },
     coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
@@ -790,11 +791,11 @@ function derivedFixture() {
 
 test("derived sub-windows sum parent trend buckets", () => {
   const snapshot = normalizeDashboardSnapshot(derivedFixture());
-  // 15m = last 15 minute buckets x input 1; 30m = last 30.
-  assert.equal(snapshot.derived["15m"].totals.input, 15);
-  assert.equal(snapshot.derived["15m"].trends.length, 15);
-  assert.equal(snapshot.derived["30m"].totals.input, 30);
-  assert.equal(snapshot.derived["30m"].trends.length, 30);
+  // 15m = last 30 half-minute buckets x input 1; 30m = last 60.
+  assert.equal(snapshot.derived["15m"].totals.input, 30);
+  assert.equal(snapshot.derived["15m"].trends.length, 30);
+  assert.equal(snapshot.derived["30m"].totals.input, 60);
+  assert.equal(snapshot.derived["30m"].trends.length, 60);
   // 2h = last 24 five-minute day buckets x input 2.
   assert.equal(snapshot.derived["2h"].totals.input, 48);
   assert.equal(snapshot.derived["2h"].trends.length, 24);
@@ -898,7 +899,7 @@ test("derived splits aggregate bucket evidence and union records", () => {
   const names = providers.map((entry) => entry.name).sort();
   // Bucket evidence (opencode-go: 15 x input 1) unions record evidence (codex: 7).
   assert.deepEqual(names, ["codex", "opencode-go"]);
-  assert.equal(providers.find((entry) => entry.name === "opencode-go")?.totals.input, 15);
+  assert.equal(providers.find((entry) => entry.name === "opencode-go")?.totals.input, 30);
   assert.equal(providers.find((entry) => entry.name === "codex")?.totals.input, 7);
   const models = snapshot.derived["15m"].models.map((entry) => entry.name).sort();
   assert.deepEqual(models, ["codex/model", "space-bunny-free"]);
@@ -1007,8 +1008,7 @@ test("derived projects match range-fetched splits and union records", () => {
   assert.equal(snapshot.derived["15m"].projects.find((entry) => entry.name === "/proj/stats")?.totals.input, 100);
 });
 
-test("terminal height pins the footer block to the bottom row", () => {
-  const input = fixture();
+test("terminal height pins the footer block to the bottom row", () => {  const input = fixture();
   const packed = renderDashboard(input, { isTTY: false, color: false, width: 100 });
   const pinned = renderDashboard(input, { isTTY: false, color: false, width: 100, height: 200 });
   const pinnedLines = pinned.split("\n");
@@ -1025,4 +1025,15 @@ test("terminal height pins the footer block to the bottom row", () => {
     pinnedLines.filter((line) => line.trim().length > 0),
     packed.split("\n").filter((line) => line.trim().length > 0),
   );
+});
+
+test("trend graph shows a y axis with threshold labels and zero", () => {
+  const input = fixture({ trends: { day: [{ label: "09:00", totals: toUsageTotals({ input: 100, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }) }] } });
+  const plain = renderDashboard(input, { isTTY: false, color: false, width: 100, selectedWindow: "day" });
+  const start = plain.indexOf("Trend · today");
+  const panel = plain.slice(start, start + 800);
+  // Axis separator plus top (max) and bottom (0) labels.
+  assert.match(panel, /│/);
+  assert.match(panel, /100/);
+  assert.match(panel, / 0 /);
 });

@@ -92,7 +92,7 @@ test("ISO week rolls on local Monday and preserves DST-safe bounds", () => {
 test("trend buckets partition each requested window", () => {
   const windows = createUsageWindows(instant("2026-09-02T10:15:30.000Z"), "Europe/Istanbul");
 
-  for (const [kind, expectedCount] of [["hour", 60], ["day", 288], ["week", 7], ["month", 30]] as const) {
+  for (const [kind, expectedCount] of [["hour", 120], ["day", 288], ["week", 7], ["month", 30]] as const) {
     const window = windows[kind];
     const buckets = createUsageTrendBuckets(window);
     assert.equal(buckets.length, expectedCount);

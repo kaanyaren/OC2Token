@@ -67,6 +67,7 @@ type CivilDateTime = Readonly<CivilDate & { hour: number; minute: number; second
 
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
+const THIRTY_SECONDS_MS = 30 * 1000;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const ISO_WEEK_DAYS = 7;
@@ -421,7 +422,9 @@ export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBuck
   };
 
   if (window.kind === "hour") {
-    const bucketDuration = MINUTE_MS;
+    // Thirty-second buckets: 120 per hour. Fine enough for the derived 15m
+    // range (30 bars) while the hour graph resamples to the same picture.
+    const bucketDuration = THIRTY_SECONDS_MS;
     for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
       append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
     }
