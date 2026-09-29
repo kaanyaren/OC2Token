@@ -201,12 +201,12 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
     ...Array.from({ length: 120 }, () => "hour" as const),
      ...Array.from({ length: 288 }, () => "day" as const),
     ...Array.from({ length: 7 }, () => "week" as const),
-    ...Array.from({ length: 30 }, () => "month" as const),
+    ...Array.from({ length: 240 }, () => "month" as const),
   ]);
   assert.equal(result.trendsByWindow?.hour?.length, 120);
   assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.equal(result.trendsByWindow?.week?.length, 7);
-  assert.equal(result.trendsByWindow?.month?.length, 30);
+  assert.equal(result.trendsByWindow?.month?.length, 240);
   assert.equal(transport.sessionCalls.length, 0);
   assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);

@@ -432,7 +432,10 @@ export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBuck
   }
 
   if (window.kind === "day" || window.kind === "month") {
-    const bucketDuration = window.kind === "day" ? FIVE_MINUTES_MS : DAY_MS;
+    // Three-hour month buckets: 240 per 30 days. Fine enough to see structure
+    // inside multi-day usage while the month graph resamples to the same
+    // picture. Costs ~210 extra per-bucket stats calls per refresh.
+    const bucketDuration = window.kind === "day" ? FIVE_MINUTES_MS : DAY_MS / 8;
     for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
       append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
     }
