@@ -46,6 +46,7 @@ import {
   type DashboardWindow,
 } from "./types.js";
 import { ALL_PROVIDER_KINDS } from "../settings/index.js";
+import { resolveAppVersion } from "../../version.js";
 
 const CARD_MIN_WIDTH = 27;
 const WIDE_LAYOUT_MIN_WIDTH = 90;
@@ -899,10 +900,21 @@ function renderProjectsPanel(
   return lines;
 }
 
-function renderCredit(width: number, color: boolean): string {
+function renderCredit(width: number, color: boolean, appVersion?: string): string {
   const repo = GITHUB_URL;
-  const full = `Kaan Yaren · ${repo}`;
-  const plain = width < 45 ? "Kaan Yaren" : full;
+  const rawVersion = (appVersion ?? resolveAppVersion()).trim();
+  const tag = rawVersion.length === 0
+    ? ""
+    : rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`;
+  const full = tag.length > 0 ? `Kaan Yaren · ${tag} · ${repo}` : `Kaan Yaren · ${repo}`;
+  let plain: string;
+  if (width < 45) {
+    // Narrow: drop the URL first, keep the version when it fits.
+    const shortWithVersion = tag.length > 0 ? `Kaan Yaren · ${tag}` : "Kaan Yaren";
+    plain = shortWithVersion.length <= width ? shortWithVersion : "Kaan Yaren";
+  } else {
+    plain = full;
+  }
   const truncated = truncate(plain, width);
   // Use hyperlink OSC 8 when color/ansi enabled — still counts as plain text for width checks (stripAnsi removes it)
   const link = colorEnabled({ isTTY: true, ansi: true, color })
@@ -1130,7 +1142,7 @@ export function renderDashboard(
   }
 
   lines.push("");
-  lines.push(renderCredit(width, color));
+  lines.push(renderCredit(width, color, options.appVersion));
 
   const outerPadding = " ".repeat(APP_PADDING);
   const content = lines

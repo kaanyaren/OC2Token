@@ -7,6 +7,7 @@ import {
   type OpenCodeProject,
   type OpenCodeSessionStats,
   type OpenCodeTransport,
+  type RangeProjectSplits,
   type UsageBreakdown,
   type UsageSource,
   type UsageTotals,
@@ -258,6 +259,35 @@ export class OpenCodeStatsSource implements UsageSource {
       }
     }
 
+    // Per-project splits for dashboard-only sub-ranges (15m/30m/2h). One
+    // stats call per project per range — bounded by the project count, and
+    // skipped when the parent window is empty. Per-project failures are
+    // isolated inside collectProjectBreakdowns (range mismatch included),
+    // so a short range degrades to records-only splits instead of failing
+    // the refresh. The renderer matches these by exact from/to instants.
+    const projectSplitsByRange: RangeProjectSplits[] = [];
+    if (allProjects.length > 0) {
+      const now = request.capturedAt.getTime();
+      const ranges = [
+        { minutes: 15, parent: totalsByWindow["hour"] },
+        { minutes: 30, parent: totalsByWindow["hour"] },
+        { minutes: 120, parent: totalsByWindow["day"] },
+      ];
+      for (const { minutes, parent } of ranges) {
+        throwIfAborted(request.signal);
+        if (parent === undefined || parent.recorded_total === 0) continue;
+        const from = new Date(now - minutes * 60 * 1000);
+        const to = new Date(now);
+        const projects = await collectProjectBreakdowns(
+          this.transport,
+          { kind: "hour", semantics: "rolling-hour", timezone: request.windows[0]?.timezone ?? "UTC", from, to, label: `last ${minutes} minutes` },
+          allProjects,
+          request.signal,
+        );
+        if (projects.length > 0) projectSplitsByRange.push({ from, to, projects });
+      }
+    }
+
     throwIfAborted(request.signal);
     return {
       capturedAt: new Date(request.capturedAt.getTime()),
@@ -272,6 +302,7 @@ export class OpenCodeStatsSource implements UsageSource {
       ...(Object.keys(providersByWindow).length === 0 ? {} : { providersByWindow: providersByWindow as UsageBreakdownsByWindow }),
       ...(Object.keys(projectsByWindow).length === 0 ? {} : { projectsByWindow: projectsByWindow as UsageBreakdownsByWindow }),
       ...(Object.keys(trendsByWindow).length === 0 ? {} : { trendsByWindow: trendsByWindow as UsageTrendsByWindow }),
+      ...(projectSplitsByRange.length === 0 ? {} : { projectSplitsByRange }),
       coverage: completeStatsCoverage,
       serverFingerprint: health.fingerprint,
       serverVersion: health.version,

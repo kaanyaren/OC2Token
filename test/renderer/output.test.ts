@@ -22,6 +22,7 @@ import {
   usageTotalsFrom,
 } from "../../src/output/index.js";
 import { normalizeSettings } from "../../src/dashboard/settings/index.js";
+import { APP_VERSION } from "../../src/version.js";
 
 const NOW = new Date("2026-09-02T10:00:00.000Z");
 
@@ -147,7 +148,42 @@ test("GitHub credit exposes a clickable URL in TTY and plain modes", () => {
   const plain = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
   assert.match(plain, new RegExp(GITHUB_URL.replaceAll("/", "\\/")));
   assert.doesNotMatch(plain, /\u001b\[/);
+
+  // Version appears next to the link (e.g. `Kaan Yaren · v0.1.13 · <URL>`).
+  const versionTag = APP_VERSION.startsWith("v") ? APP_VERSION : `v${APP_VERSION}`;
+  const coloredCredit = colored.split("\n").find((line) => line.includes("Kaan Yaren"));
+  const plainCredit = plain.split("\n").find((line) => line.includes("Kaan Yaren"));
+  assert.ok(coloredCredit?.includes(versionTag), `colored credit should contain ${versionTag}`);
+  assert.ok(coloredCredit?.includes(GITHUB_URL));
+  assert.ok(plainCredit?.includes(versionTag), `plain credit should contain ${versionTag}`);
+  assert.ok(plainCredit?.includes(GITHUB_URL));
+  assert.match(plainCredit ?? "", /Kaan Yaren · v\S+ · https?:\/\//);
 });
+
+test("credit bar threads an explicit version and stays centered within width", () => {
+  const explicit = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    now: NOW,
+    appVersion: "9.9.9",
+  });
+  const explicitCredit = explicit.split("\n").find((line) => line.includes("Kaan Yaren"));
+  assert.ok(explicitCredit?.includes("Kaan Yaren · v9.9.9 · "));
+  assert.ok(explicitCredit?.includes(GITHUB_URL));
+  assert.equal(explicitCredit?.length, 100);
+
+  // Narrow widths drop the URL first but keep the version when it fits.
+  const narrow = renderDashboard(fixture(), { isTTY: true, color: false, width: 40, now: NOW });
+  assert.ok(narrow.split("\n").every((line) => [...line].length <= 40));
+  const narrowCredit = narrow.split("\n").find((line) => line.includes("Kaan Yaren"));
+  assert.ok(narrowCredit?.includes(versionTagFor(APP_VERSION)));
+  assert.doesNotMatch(narrowCredit ?? "", /github\.com/);
+});
+
+function versionTagFor(version: string): string {
+  return version.startsWith("v") ? version : `v${version}`;
+}
 
 test("very narrow dashboard truncates every line instead of relying on wrapping", () => {
   for (const width of [20, 40]) {
@@ -880,8 +916,7 @@ test("normalizeTrend retains per-bucket splits through the cache path", () => {
   assert.equal(once.windows.hour.trends[0]?.providers?.[0]?.totals.input, 3);
 });
 
-test("normalizeVisibleCards enforces exactly four distinct cards", () => {
-  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
+test("normalizeVisibleCards enforces exactly four distinct cards", () => {  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
   assert.deepEqual(normalizeVisibleCards(null), ["hour", "day", "week", "month"]);
   assert.deepEqual(
     normalizeVisibleCards(["15m", "15m", "bogus", "day", "week", "month", "30m", "2h", "hour"]),
@@ -928,4 +963,37 @@ test("top cards show exact token counts with a tokens suffix when it fits", () =
   const narrow = renderDashboard(input, { isTTY: false, color: false, width: 20, selectedWindow: "day" });
   assert.match(narrow, /1\.1B/);
   assert.doesNotMatch(narrow, /1,132,234,235/);
+});
+
+test("derived projects match range-fetched splits and union records", () => {
+  const base = derivedFixture();
+  const from = new Date("2026-09-02T09:45:00.000Z");
+  const to = new Date("2026-09-02T10:00:00.000Z");
+  const projectTotals = (input: number) =>
+    toUsageTotals({ input, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
+  const input = {
+    ...base,
+    records: [
+      createUsageRecord({
+        sessionID: "codex-session",
+        messageID: "codex-message",
+        createdAt: new Date("2026-09-02T09:50:00.000Z"),
+        model: "codex/model",
+        tokens: { input: 7, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+        observedAt: NOW,
+        completeness: "final",
+        provider: "codex",
+        project: "/proj/codex",
+      }),
+    ],
+    projectSplitsByRange: [
+      { from, to, projects: [{ name: "/proj/stats", totals: projectTotals(100) }] },
+      // Near-miss range must not match.
+      { from: new Date("2026-09-02T09:44:00.000Z"), to, projects: [{ name: "/proj/wrong", totals: projectTotals(999) }] },
+    ],
+  };
+  const snapshot = normalizeDashboardSnapshot(input);
+  const names = snapshot.derived["15m"].projects.map((entry) => entry.name).sort();
+  assert.deepEqual(names, ["/proj/codex", "/proj/stats"]);
+  assert.equal(snapshot.derived["15m"].projects.find((entry) => entry.name === "/proj/stats")?.totals.input, 100);
 });

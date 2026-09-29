@@ -2,8 +2,8 @@
 
 import process from "node:process";
 import { basename } from "node:path";
-import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
+import { APP_VERSION } from "./version.js";
 
 import {
   ANSI,
@@ -65,29 +65,11 @@ export function openGithubPage(): void {
 }
 
 /**
- * CLI version is read from package.json (not hardcoded) so `--version` and
- * `--help` cannot drift. Falls back to "0.1.4" when the manifest is
- * unreachable (e.g. unusual bundling). Tries both src (`../package.json`)
- * and dist (`../../package.json`) layouts.
+ * CLI version comes from the shared package.json resolver (see
+ * src/version.ts) so `--version`, `--help`, and the dashboard credit line
+ * cannot drift.
  */
-function resolveCliVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    for (const candidate of ["../package.json", "../../package.json"]) {
-      try {
-        const pkg = require(candidate) as { version?: unknown };
-        if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
-      } catch {
-        // Try the next candidate layout.
-      }
-    }
-  } catch {
-    // createRequire itself failed — fall through to the fallback below.
-  }
-  return "0.1.4";
-}
-
-const VERSION = resolveCliVersion();
+const VERSION = APP_VERSION;
 /**
  * Error envelope version. Distinct from stable snapshot `schemaVersion: 4`
  * (see src/output/json.ts JSON_SCHEMA_VERSION): error payloads use
@@ -369,7 +351,7 @@ async function runOnce(options: CliOptions, io: CliIO): Promise<number> {
   const format = options.json ? "json" : options.format === "auto" ? "table" : options.format;
   if (format === "json") io.stdout.write(`${renderJSON(result, false)}\n`);
   else if (format === "table") io.stdout.write(`${renderTable(result)}\n`);
-  else io.stdout.write(`${renderDashboard(result, { isTTY: false, color: options.color, selectedWindow: options.period })}\n`);
+  else io.stdout.write(`${renderDashboard(result, { isTTY: false, color: options.color, selectedWindow: options.period, appVersion: VERSION })}\n`);
   return result.coverage.complete ? 0 : 3;
 }
 
@@ -593,6 +575,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       now: clock.wallNow(),
       selectedWindow: selectedCard,
       help,
+      appVersion: VERSION,
       // Always pass table visibility so hidden tables stay hidden when the
       // panel is closed; the panel itself only renders when visible.
       settings: {

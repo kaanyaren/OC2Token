@@ -669,6 +669,23 @@ export class UnifiedUsageSource implements UsageSource {
     const serverVersion = opencodeSuccess?.result.serverVersion;
     const trendsByWindow = mergeTrends(successful, request);
 
+    // Merge range-keyed project splits by exact from/to instants. Only stats
+    // sources produce them; record sources contribute their projects through
+    // records at render time instead.
+    const splitsByRange = new Map<string, { from: Date; to: Date; projects: UsageBreakdown[] }>();
+    for (const { result } of successful) {
+      for (const splits of result.projectSplitsByRange ?? []) {
+        const key = `${splits.from.getTime()}\0${splits.to.getTime()}`;
+        const current = splitsByRange.get(key);
+        if (current === undefined) {
+          splitsByRange.set(key, { from: splits.from, to: splits.to, projects: [...splits.projects] });
+        } else {
+          current.projects = [...mergeBreakdowns([...current.projects, ...splits.projects])];
+        }
+      }
+    }
+    const projectSplitsByRange = [...splitsByRange.values()].sort((a, b) => a.from.getTime() - b.from.getTime());
+
     return {
       capturedAt: new Date(request.capturedAt.getTime()),
       windows: request.windows.map((w) => ({
@@ -689,6 +706,7 @@ export class UnifiedUsageSource implements UsageSource {
         ? { projectsByWindow, projects: [...(projectsMutable.week ?? projectsMutable.day ?? projectsMutable.hour ?? Object.values(projectsMutable).flat())] }
         : {}),
       ...(trendsByWindow === undefined ? {} : { trendsByWindow }),
+      ...(projectSplitsByRange.length === 0 ? {} : { projectSplitsByRange }),
       coverage,
       ...(serverFingerprint === undefined ? {} : { serverFingerprint }),
       ...(serverVersion === undefined ? {} : { serverVersion }),
@@ -734,6 +752,7 @@ export class CachedUsageSource implements UsageSource {
       ...(result.providersByWindow === undefined ? {} : { providersByWindow: result.providersByWindow }),
       ...(result.projectsByWindow === undefined ? {} : { projectsByWindow: result.projectsByWindow }),
       ...(result.trendsByWindow === undefined ? {} : { trendsByWindow: result.trendsByWindow }),
+      ...(result.projectSplitsByRange === undefined ? {} : { projectSplitsByRange: result.projectSplitsByRange }),
       coverage: result.coverage,
       ...(result.serverFingerprint === undefined ? {} : { serverFingerprint: result.serverFingerprint }),
       ...(result.serverVersion === undefined ? {} : { serverVersion: result.serverVersion }),
@@ -789,6 +808,7 @@ export async function readCachedSnapshot(
       ...(snapshot.providersByWindow === undefined ? {} : { providersByWindow: snapshot.providersByWindow }),
       ...(snapshot.projectsByWindow === undefined ? {} : { projectsByWindow: snapshot.projectsByWindow }),
       ...(snapshot.trendsByWindow === undefined ? {} : { trendsByWindow: snapshot.trendsByWindow }),
+      ...(snapshot.projectSplitsByRange === undefined ? {} : { projectSplitsByRange: snapshot.projectSplitsByRange }),
       coverage: snapshot.coverage,
       ...(snapshot.serverFingerprint === undefined ? {} : { serverFingerprint: snapshot.serverFingerprint }),
       ...(snapshot.serverVersion === undefined ? {} : { serverVersion: snapshot.serverVersion }),

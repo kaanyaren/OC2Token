@@ -257,3 +257,31 @@ test("mergeTrends carries per-bucket splits from exact supplied buckets", async 
   assert.equal(first.providers?.[0]?.totals.input, 10);
   assert.equal(first.models?.[0]?.name, "space-bunny-free");
 });
+
+test("unified result merges range-keyed project splits by exact instants", async () => {
+  const wins = windows();
+  const split = (name: string, input: number) => ({
+    name,
+    totals: toUsageTotals({ input, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }),
+  });
+  const from = new Date("2026-09-02T09:45:00.000Z");
+  const to = new Date("2026-09-02T10:00:00.000Z");
+  const statsResult: CollectionResult = {
+    capturedAt: NOW,
+    windows: wins,
+    source: "stats",
+    records: [],
+    totalsByWindow: {},
+    projectSplitsByRange: [{ from, to, projects: [split("/proj/a", 100)] }],
+    coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const unified = new UnifiedUsageSource(
+    sourceReturning(statsResult),
+    sourceReturning(emptyProviderResult("codex")),
+    sourceReturning(emptyProviderResult("antigravity")),
+  );
+  const result = await unified.collect(request());
+  assert.equal(result.projectSplitsByRange?.length, 1);
+  assert.equal(result.projectSplitsByRange?.[0]?.projects[0]?.name, "/proj/a");
+  assert.equal(result.projectSplitsByRange?.[0]?.projects[0]?.totals.input, 100);
+});

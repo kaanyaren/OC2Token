@@ -191,6 +191,12 @@ export interface DashboardRenderOptions {
   };
   /** Which breakdown table has keyboard focus (when settings panel is closed). */
   readonly focusedTable?: "models" | "providers" | "projects";
+  /**
+   * App version shown in the bottom credit bar (e.g. "0.1.13", rendered as
+   * "v0.1.13"). Optional — the renderer falls back to the shared package.json
+   * resolver when absent so tests and `--once` paths keep working.
+   */
+  readonly appVersion?: string;
 }
 
 export interface OutputOptions extends DashboardRenderOptions {
@@ -778,13 +784,37 @@ function bucketStart(bucket: TrendBucket): number | null {
 }
 
 /**
+ * Find stats-fetched project splits for an exact sub-range. Instants must
+ * match to the millisecond: a near-miss is a different range, not evidence.
+ */
+function rangeProjectSplits(
+  root: UnknownRecord,
+  from: Date,
+  to: Date,
+): ReadonlyArray<BreakdownTotal> {
+  const splits = root.projectSplitsByRange;
+  if (!Array.isArray(splits)) return [];
+  const result: BreakdownTotal[] = [];
+  for (const entry of splits) {
+    const record = asRecord(entry);
+    const entryFrom = asDate(record.from);
+    const entryTo = asDate(record.to);
+    if (entryFrom === null || entryTo === null) continue;
+    if (new Date(entryFrom).getTime() !== from.getTime()) continue;
+    if (new Date(entryTo).getTime() !== to.getTime()) continue;
+    result.push(...normalizeBreakdown(record.projects));
+  }
+  return result;
+}
+
+/**
  * Derive a dashboard-only sub-window from already-collected data. Totals and
  * trends prefer the parent window's trend buckets (consistent across stats
  * and record sources, since mergeTrends/deriveTrends aggregate all sources);
  * records are the fallback when the parent has no buckets. Splits union
- * bucket evidence with record evidence; projects stay records-only because
- * stats never reports them per bucket. Returns unmeasured when neither
- * source has evidence in range.
+ * bucket/range evidence with record evidence; projects match range-fetched
+ * stats splits by exact instants. Returns unmeasured when neither source has
+ * evidence in range.
  *
  * `now` is the capture instant (the rolling hour's end), NOT the parent
  * window's end: calendar windows (day/week) end at a future midnight.
@@ -840,13 +870,15 @@ function deriveSubWindow(
   const totals = sumTotals(trends.map((bucket) => bucket.totals));
   // Splits union bucket evidence (stats providers) with record evidence
   // (file providers). Bucket splits alone would erase record providers in a
-  // mixed range; records alone would erase stats providers. Projects stay
-  // records-only: stats never reports them per bucket.
+  // mixed range; records alone would erase stats providers. Projects union
+  // range-fetched stats splits (matched by exact instants) with records;
+  // without either, the split is honestly empty rather than fabricated.
   const bucketModels = inRange.flatMap((bucket) => bucket.models ?? []);
   const bucketProviders = inRange.flatMap((bucket) => bucket.providers ?? []);
+  const rangeProjects = rangeProjectSplits(root, from, to);
   const models = unionBreakdowns([bucketModels, recordsAsBreakdown(root, "model", synthWindow)]);
   const providers = unionBreakdowns([bucketProviders, recordsAsBreakdown(root, "provider", synthWindow)]);
-  const projects = recordsAsBreakdown(root, "project", synthWindow);
+  const projects = unionBreakdowns([rangeProjects, recordsAsBreakdown(root, "project", synthWindow)]);
   const cost = estimatedCostForBreakdowns(models, true);
   return {
     window: synthWindow,

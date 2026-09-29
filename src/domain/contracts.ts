@@ -60,6 +60,18 @@ export interface UsageTrendBucket extends UsageBucket {
   readonly providers?: ReadonlyArray<UsageBreakdown>;
 }
 
+/**
+ * Per-project splits for a dashboard-only sub-range (15m/30m/2h), fetched
+ * with one stats call per project for that exact range. Range-keyed instead
+ * of window-kind-keyed so the domain never learns UI card kinds; the
+ * renderer matches derived ranges by exact from/to instants.
+ */
+export interface RangeProjectSplits {
+  readonly from: Date;
+  readonly to: Date;
+  readonly projects: ReadonlyArray<UsageBreakdown>;
+}
+
 export type UsageTrendsByWindow = Readonly<
   Partial<Record<UsageWindowKind, ReadonlyArray<UsageTrendBucket>>>
 >;
@@ -105,6 +117,8 @@ export interface CollectionResult {
   readonly providersByWindow?: UsageBreakdownsByWindow;
   readonly projectsByWindow?: UsageBreakdownsByWindow;
   readonly trendsByWindow?: UsageTrendsByWindow;
+  /** Per-project splits for dashboard-only sub-ranges (stats sources only). */
+  readonly projectSplitsByRange?: ReadonlyArray<RangeProjectSplits>;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;
@@ -133,6 +147,8 @@ export interface StoredSnapshot {
   readonly providersByWindow?: UsageBreakdownsByWindow;
   readonly projectsByWindow?: UsageBreakdownsByWindow;
   readonly trendsByWindow?: UsageTrendsByWindow;
+  /** Per-project splits for dashboard-only sub-ranges (stats sources only). */
+  readonly projectSplitsByRange?: ReadonlyArray<RangeProjectSplits>;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;
