@@ -189,8 +189,14 @@ function mergeDiscoveryOptions(options: ConnectionOptions): DiscoverOptions {
   };
 }
 
+/** Underlying spawn failure, e.g. `spawn opencode2 ENOENT`. */
+function publicReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === "" ? "spawn failed" : message;
+}
+
 /**
- * Resolve the V2 executable to an absolute path.
+ * Locate the V2 executable, or `undefined` when nothing is on disk.
  *
  * `opencode2` is only a PATH shim in some installs (the official macOS
  * installer drops it in `~/.opencode/bin`, Homebrew in `/opt/homebrew/bin`),
@@ -198,7 +204,7 @@ function mergeDiscoveryOptions(options: ConnectionOptions): DiscoverOptions {
  * has neither. Spawning the bare name then fails with ENOENT and no service
  * ever starts, so probe PATH ourselves and then the well-known install dirs.
  */
-export function resolveServeCommand(): string[] {
+export function resolveServeExecutable(): string[] | undefined {
   const home = process.env.HOME;
   const dirs = [...(process.env.PATH ?? "").split(":")];
   if (home !== undefined && home !== "") dirs.push(`${home}/.opencode/bin`);
@@ -206,11 +212,22 @@ export function resolveServeCommand(): string[] {
     for (const dir of dirs) {
       if (dir !== "") {
         const candidate = join(dir, name);
-        if (existsSync(candidate)) return [candidate, "serve", "--service"];
+        if (existsSync(candidate)) return [candidate];
       }
     }
   }
-  return ["opencode2", "serve", "--service"];
+  return undefined;
+}
+
+/**
+ * Resolve the V2 executable to an absolute path.
+ *
+ * Falls back to the bare name so callers still get a usable command when the
+ * executable genuinely is absent; `doctor` reports that case explicitly.
+ */
+export function resolveServeCommand(): string[] {
+  const executable = resolveServeExecutable();
+  return executable === undefined ? ["opencode2", "serve", "--service"] : [...executable, "serve", "--service"];
 }
 
 function mergeEnsureOptions(options: ConnectionOptions): EnsureOptions {
@@ -252,7 +269,21 @@ export async function connectOpenCode(options: ConnectionOptions = {}): Promise<
     if (options.ensure === false) {
       throw new DomainError("transport", "No healthy OpenCode 2 service was discovered");
     }
-    endpoint = await service.ensure(mergeEnsureOptions(options));
+    const ensureOptions = mergeEnsureOptions(options);
+    try {
+      endpoint = await service.ensure(ensureOptions);
+    } catch (error) {
+      // Spawning the bare executable name fails with ENOENT whenever OC2Token
+      // is launched without the install dir on PATH. Naming the executable we
+      // tried turns "no service discovered" into an actionable message.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        throw new DomainError(
+          "transport",
+          `Could not start OpenCode 2: ${ensureOptions.command?.[0]} not found (${publicReason(error)})`,
+        );
+      }
+      throw error;
+    }
     throwIfAborted(signal);
     // A freshly ensured 2.0.6 service still has no `/api/health`, so the
     // endpoint returned by ensure is used directly without re-probing.

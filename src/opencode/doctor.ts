@@ -5,12 +5,20 @@ import {
 } from "../domain/index.js";
 import {
   connectOpenCode,
+  resolveServeExecutable,
   type ConnectionOptions,
   type OpenCodeConnection,
 } from "./client.js";
 import { isStatsRangeMismatch, OpenCode2Transport, type StatsRequestOptions } from "./transport.js";
 
-export type DoctorCheckName = "service" | "health" | "stats-range" | "opencode" | "codex" | "antigravity";
+export type DoctorCheckName =
+  | "executable"
+  | "service"
+  | "health"
+  | "stats-range"
+  | "opencode"
+  | "codex"
+  | "antigravity";
 
 export interface DoctorCheck {
   readonly name: DoctorCheckName;
@@ -48,6 +56,23 @@ export async function runOpenCodeDoctor(options: DoctorOptions = {}): Promise<Do
   const checks: DoctorCheck[] = [];
   let connection = options.connection;
   let transport = options.transport;
+
+  // Reported before discovery: "the executable does not exist" and "no
+  // service is running" look identical downstream, but only the first means
+  // OC2Token can never start a service on its own.
+  if (options.ensureOptions?.command === undefined) {
+    const executable = resolveServeExecutable();
+    checks.push(
+      executable === undefined
+        ? {
+            name: "executable",
+            ok: false,
+            message:
+              "opencode2 executable not found on PATH or in ~/.opencode/bin; reinstall OpenCode 2 or pass ensureOptions.command",
+          }
+        : { name: "executable", ok: true, message: executable[0] },
+    );
+  }
 
   if (connection === undefined && transport === undefined) {
     try {

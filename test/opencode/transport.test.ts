@@ -11,6 +11,7 @@ import {
   OpenCode2Transport,
   connectOpenCode,
   resolveServeCommand,
+  runOpenCodeDoctor,
   isStatsRangeMismatch,
   type OpenCodeClientLike,
 } from "../../src/opencode/index.js";
@@ -243,6 +244,12 @@ test("uses injected Service.discover/ensure and reports health metadata", async 
   assert.equal(connection.health.fingerprint.length, 24);
 });
 
+const undiscoverable = {
+  discover: async () => undefined,
+  ensure: async () => ({ url: "http://127.0.0.1:4096", auth: undefined }),
+  headers: () => undefined,
+};
+
 test("resolveServeCommand finds the V2 executable when PATH lacks it", () => {
   // Reproduces the GUI/dashboard launch: PATH has no install dir, but the
   // official macOS installer put the executable in ~/.opencode/bin.
@@ -259,6 +266,26 @@ test("resolveServeCommand finds the V2 executable when PATH lacks it", () => {
       "serve",
       "--service",
     ]);
+  } finally {
+    process.env.PATH = path;
+    process.env.HOME = realHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("doctor reports a missing executable instead of blaming the service", async () => {
+  // Without this check an unfindable executable surfaces as "No healthy
+  // OpenCode 2 service was discovered", which points at the wrong layer.
+  const home = mkdtempSync(join(tmpdir(), "oc2token-home-"));
+  const path = process.env.PATH;
+  const realHome = process.env.HOME;
+  process.env.PATH = "";
+  process.env.HOME = home;
+  try {
+    const report = await runOpenCodeDoctor({ service: undiscoverable });
+    const executable = report.checks.find((check) => check.name === "executable");
+    assert.equal(executable?.ok, false);
+    assert.match(String(executable?.message), /not found on PATH/);
   } finally {
     process.env.PATH = path;
     process.env.HOME = realHome;
