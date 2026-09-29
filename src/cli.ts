@@ -123,7 +123,7 @@ Options:
   -h, --help             Show this help
   -v, --version          Show the version
 
-Dashboard keys: r refresh, 1/2/3/4 to select period, p projects, s settings, ? help, q quit. Mouse: click cards, footer actions, and settings rows.
+Dashboard keys: r refresh, 1/2/3/4 to select card, p projects, s settings, ? help, q quit. Mouse: click cards, footer actions, and settings rows.
 `;
 }
 
@@ -572,6 +572,9 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       ansi: true,
       color: options.color,
       width: Math.max(20, io.stdout.columns || 100),
+      // Pin the footer block to the bottom row when the terminal reports rows.
+      // Undefined (pipes, tests) keeps content packed as before.
+      height: io.stdout.rows,
       now: clock.wallNow(),
       selectedWindow: selectedCard,
       help,

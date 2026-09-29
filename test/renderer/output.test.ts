@@ -691,6 +691,15 @@ test("footer click tokens map to dashboard actions", () => {
   assert.equal(footerClickAction(""), undefined);
 });
 
+test("help panel documents collapse, cards, and mouse actions", () => {  const plain = renderDashboard(fixture(), { isTTY: false, color: false, width: 120, help: true });
+  assert.match(plain, /◆ Help/);
+  assert.match(plain, /Expand\/collapse/);
+  assert.match(plain, /card slots/);
+  assert.match(plain, /Click:/);
+  const noHelp = renderDashboard(fixture(), { isTTY: false, color: false, width: 120 });
+  assert.doesNotMatch(noHelp, /◆ Help/);
+});
+
 test("footer token lookup resolves the word under a 1-based column", () => {
   const line = " r Refresh   1 Hour";
   assert.equal(footerTokenAtX(line, 1), undefined); // leading space
@@ -996,4 +1005,24 @@ test("derived projects match range-fetched splits and union records", () => {
   const names = snapshot.derived["15m"].projects.map((entry) => entry.name).sort();
   assert.deepEqual(names, ["/proj/codex", "/proj/stats"]);
   assert.equal(snapshot.derived["15m"].projects.find((entry) => entry.name === "/proj/stats")?.totals.input, 100);
+});
+
+test("terminal height pins the footer block to the bottom row", () => {
+  const input = fixture();
+  const packed = renderDashboard(input, { isTTY: false, color: false, width: 100 });
+  const pinned = renderDashboard(input, { isTTY: false, color: false, width: 100, height: 200 });
+  const pinnedLines = pinned.split("\n");
+  // Frame fills exactly the terminal height, credit on the last row.
+  assert.equal(pinnedLines.length, 200);
+  assert.match(pinnedLines[199] ?? "", /Kaan Yaren/);
+  // Status box sits directly above the footer at the bottom.
+  const statusIdx = pinnedLines.findIndex((line) => line.includes("Status:"));
+  assert.ok(statusIdx > pinned.split("\n").length - 12);
+  // Without height the frame is shorter; its non-blank content is identical
+  // and in the same order, with blanks inserted only above the footer block.
+  assert.ok(packed.split("\n").length < 200);
+  assert.deepEqual(
+    pinnedLines.filter((line) => line.trim().length > 0),
+    packed.split("\n").filter((line) => line.trim().length > 0),
+  );
 });

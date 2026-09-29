@@ -945,7 +945,7 @@ function renderFooter(
       return [
         "",
         panelHeading("Help", width, color, "orange"),
-        ` ${key("r")} refresh  ${key("1/2/3/4")} periods ${key("p")} projects`,
+        ` ${key("r")} refresh  ${key("1/2/3/4")} cards ${key("p")} projects`,
         ` ${key("q")} quit  ${key("?")} close`,
       ];
     }
@@ -953,15 +953,18 @@ function renderFooter(
       return [
         "",
         panelHeading("Help", width, color, "orange"),
-        ` ${key("r/R")} Refresh   ${key("1/2/3/4")} Periods  ${key("p")} Projects`,
-        ` ${key("q")} Quit   ${key("?")} Toggle help   ${key("s")} Settings`,
+        ` ${key("r/R")} Refresh   ${key("1-4")} Cards   ${key("Tab")} Next card/table`,
+        ` ${key("Space")} Collapse   ${key("p")} Projects   ${key("s")} Settings`,
+        ` ${key("q")} Quit   ${key("?")} Close help`,
       ];
     }
     return [
       "",
       panelHeading("Help", width, color, "orange"),
-      `  ${key("r/R")} Refresh now   ${periodWide}   ${key("Tab/Arrows")} Navigate`,
-      `  ${key("p")} Projects   ${key("s")} Settings   ${key("q")} Quit   ${key("?")} Toggle help`,
+      `  ${key("r/R")} Refresh now   ${key("1-4")} Select visible card   ${key("Tab/Arrows")} Navigate cards`,
+      `  ${key("Space")} Expand/collapse breakdown table   ${key("p")} Projects panel   ${key("s")} Settings`,
+      `  Click: cards select · table headers/hints collapse · footer acts · ${key("q")} Quit   ${key("?")} Close help`,
+      `  Settings: providers · tables · card slots (${periodWide}) · refresh slider`,
     ];
   }
   if (width < 50) {
@@ -1128,21 +1131,32 @@ export function renderDashboard(
       lines.push(`  ${label}${error.sessionID ? ` (${safeIdentifier(error.sessionID)})` : ""}`);
     }
   }
-  lines.push(...renderStatusBox(snapshot, color, width));
-  lines.push(...renderFooter(options.help === true, color, width, visibleCards));
+  // Footer block: status, footer, panels, credit. When a terminal height is
+  // known, blank-pad above it so the block sits at the bottom row. Cards,
+  // trend, and tables stay top-anchored, so click regions never shift.
+  const footerBlock = [
+    ...renderStatusBox(snapshot, color, width),
+    ...renderFooter(options.help === true, color, width, visibleCards),
+  ];
 
   if (options.settings?.visible === true) {
-    lines.push("");
-    lines.push(...renderSettingsPanel(options.settings, width, color));
+    footerBlock.push("");
+    footerBlock.push(...renderSettingsPanel(options.settings, width, color));
   }
 
   if (options.projects?.visible === true) {
-    lines.push("");
-    lines.push(...renderProjectsPanel(snapshot, selected, width, color));
+    footerBlock.push("");
+    footerBlock.push(...renderProjectsPanel(snapshot, selected, width, color));
   }
 
-  lines.push("");
-  lines.push(renderCredit(width, color, options.appVersion));
+  footerBlock.push("");
+  footerBlock.push(renderCredit(width, color, options.appVersion));
+
+  if (options.height !== undefined && Number.isFinite(options.height)) {
+    const blanks = Math.max(0, Math.floor(options.height) - lines.length - footerBlock.length);
+    for (let i = 0; i < blanks; i += 1) lines.push("");
+  }
+  lines.push(...footerBlock);
 
   const outerPadding = " ".repeat(APP_PADDING);
   const content = lines

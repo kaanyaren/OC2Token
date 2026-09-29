@@ -170,6 +170,10 @@ Settings persist under the cache directory (`~/Library/Caches/oc2token` on macOS
 
 **Theme.** Purple carries structure, orange carries activity and focus, cyan carries inputs. Respects `NO_COLOR` and `--no-color`.
 
+**Help.** `?` opens a keymap panel above the footer (collapse, card slots, mouse actions, settings) instead of echoing the footer. `?` again or `Esc` closes it.
+
+**Height.** In an interactive terminal the status/footer block pins to the bottom row, using the full terminal height; cards, trend, and tables stay top-anchored. Pipes, tests, and `--once` output stay packed as before.
+
 **Collapsible tables.** Breakdown tables with more than 3 rows start collapsed, showing the top 3 plus a `+N more · click to expand` hint. Left-click or right-click the table header (or `Tab` to focus a table, then `Space`) to expand/collapse. Collapse state resets to collapsed on each refresh.
 
 ---

@@ -175,6 +175,8 @@ export interface DashboardRenderOptions {
   readonly selectedWindow?: DashboardCardKind;
   /** Which four cards to show. Defaults to the legacy hour/day/week/month layout. */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
+  /** Terminal rows for bottom-pinning the footer. Undefined keeps content packed (pipes, tests). */
+  readonly height?: number;
   readonly help?: boolean;
   readonly previousLineCount?: number;
   readonly settings?: DashboardSettingsView;
