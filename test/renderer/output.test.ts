@@ -21,7 +21,7 @@ import {
   toJSONSnapshot,
   usageTotalsFrom,
 } from "../../src/output/index.js";
-import { normalizeSettings } from "../../src/dashboard/settings/index.js";
+import { normalizeSettings, SETTINGS_ROWS } from "../../src/dashboard/settings/index.js";
 import { APP_VERSION } from "../../src/version.js";
 
 const NOW = new Date("2026-09-02T10:00:00.000Z");
@@ -947,12 +947,53 @@ test("settings panel lists the four card slots", () => {
       visible: true,
       enabledProviders: ["opencode"],
       refreshIntervalSeconds: 300,
-      focusedIndex: 6,
+      focusedIndex: SETTINGS_ROWS.cards,
       visibleCards: ["15m", "hour", "day", "week"],
     },
   });
   assert.match(plain, /Card 1: 15m/);
   assert.match(plain, /Card 4: Week/);
+});
+
+test("settings focus index order follows the rendered row order", () => {
+  // Tab/arrows walk focusedIndex 0..9 linearly, so the index order must match
+  // the order the panel draws its rows or navigation appears to skip rows.
+  const focusedRow = (focusedIndex: number): string => {
+    const plain = renderDashboard(fixture(), {
+      isTTY: false,
+      color: false,
+      width: 100,
+      selectedWindow: "day",
+      settings: {
+        visible: true,
+        enabledProviders: ["opencode"],
+        refreshIntervalSeconds: 300,
+        focusedIndex,
+        visibleCards: ["15m", "hour", "day", "week"],
+      },
+    });
+    // Scope to the panel: top cards also carry a "▶" marker.
+    const lines = plain.split("\n");
+    const panelStart = lines.findIndex((line) => line.includes("◆ Settings"));
+    assert.ok(panelStart !== -1, "settings panel not rendered");
+    const row = lines.slice(panelStart).find((line) => line.includes("▶"));
+    assert.ok(row !== undefined, `no focused row rendered for focusedIndex ${focusedIndex}`);
+    return row!.replace(/[│]/g, " ").replace("▶", "").replace("← toggle", "").replace("← cycle", "").trim();
+  };
+
+  const walked = Array.from({ length: SETTINGS_ROWS.count }, (_, index) => focusedRow(index));
+  assert.deepEqual(walked, [
+    "◉ opencode",
+    "○ codex",
+    "○ antigravity",
+    "◉ Providers table",
+    "◉ Projects table",
+    "Card 1: 15m",
+    "Card 2: Hour",
+    "Card 3: Today",
+    "Card 4: Week",
+    "Refresh interval · 5m",
+  ]);
 });
 
 test("top cards show exact token counts with a tokens suffix when it fits", () => {

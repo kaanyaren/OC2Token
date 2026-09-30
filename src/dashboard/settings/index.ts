@@ -15,6 +15,21 @@ export const SETTINGS_MAX_REFRESH_SECONDS = 4 * 60 * 60; // 14400
 export const SETTINGS_DEFAULT_REFRESH_SECONDS = 300;
 export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
 
+/**
+ * Settings focus rows, numbered in the order the panel *renders* them:
+ * providers (0-2) -> tables (3-4) -> card slots (5-8) -> refresh interval (9).
+ *
+ * `focusedIndex` cycles these with Tab/arrows, so the index order must match
+ * the render order or navigation appears to skip rows.
+ */
+export const SETTINGS_ROWS = {
+  providers: 0,
+  tables: 3,
+  cards: 5,
+  refresh: 9,
+  count: 10,
+} as const;
+
 export interface DashboardSettings {
   readonly enabledProviders: ReadonlyArray<ProviderKind>;
   readonly refreshIntervalSeconds: number;

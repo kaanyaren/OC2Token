@@ -45,7 +45,7 @@ import {
   type DashboardSnapshotInput,
   type DashboardWindow,
 } from "./types.js";
-import { ALL_PROVIDER_KINDS } from "../settings/index.js";
+import { ALL_PROVIDER_KINDS, SETTINGS_ROWS } from "../settings/index.js";
 import { resolveAppVersion } from "../../version.js";
 
 const CARD_MIN_WIDTH = 27;
@@ -665,13 +665,13 @@ function renderSettingsPanel(
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
-  // Breakdown tables heading (focused indices 3-4; interval moves to 5)
+  // Breakdown tables heading
   const tablesHeading = truncate("Tables  —  space to toggle", inner);
   lines.push(padPrefix + `│${pad(themePurple(tablesHeading, color, true), inner)}│`);
 
   const tableRows: ReadonlyArray<{ readonly label: string; readonly shown: boolean; readonly index: number }> = [
-    { label: "Providers table", shown: settings.showProvidersTable !== false, index: 3 },
-    { label: "Projects table", shown: settings.showProjectsTable !== false, index: 4 },
+    { label: "Providers table", shown: settings.showProvidersTable !== false, index: SETTINGS_ROWS.tables },
+    { label: "Projects table", shown: settings.showProjectsTable !== false, index: SETTINGS_ROWS.tables + 1 },
   ];
   for (const row of tableRows) {
     const focused = settings.focusedIndex === row.index;
@@ -690,14 +690,14 @@ function renderSettingsPanel(
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
-  // Top cards heading (focused indices 6-9; one row per card slot)
+  // Top cards heading (one row per card slot)
   const cardsHeading = truncate("Cards  —  space to cycle", inner);
   lines.push(padPrefix + `│${pad(themePurple(cardsHeading, color, true), inner)}│`);
 
   const visible = normalizeVisibleCards(settings.visibleCards);
   for (let slot = 0; slot < 4; slot += 1) {
     const kind = visible[slot]!;
-    const focused = settings.focusedIndex === 6 + slot;
+    const focused = settings.focusedIndex === SETTINGS_ROWS.cards + slot;
     const prefix = focused ? themeOrange("▶ ", color, true) : "  ";
     const suffix = focused ? "  ← cycle" : "";
     const suffixLen = focused ? 10 : 0; // "  ← cycle" visible length
@@ -713,7 +713,7 @@ function renderSettingsPanel(
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
   // Refresh interval heading with value
-  const intervalFocused = settings.focusedIndex === 5;
+  const intervalFocused = settings.focusedIndex === SETTINGS_ROWS.refresh;
   const intervalHeadingPlain = "Refresh interval";
   const headingAvail = Math.max(6, inner - intervalStr.length - 5 - (intervalFocused ? 2 : 0));
   const headingTrunc = truncate(intervalHeadingPlain, headingAvail);

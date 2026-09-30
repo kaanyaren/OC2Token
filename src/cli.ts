@@ -44,6 +44,7 @@ import {
   SETTINGS_DEFAULT_REFRESH_SECONDS,
   SETTINGS_MAX_REFRESH_SECONDS,
   SETTINGS_MIN_REFRESH_SECONDS,
+  SETTINGS_ROWS,
   adjustRefreshIntervalByPreset,
   clampRefreshIntervalSeconds,
   loadDashboardSettings,
@@ -671,14 +672,14 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       if (line !== undefined) {
         const hasBox = line.includes("◉") || line.includes("○");
         if (hasBox && line.includes("Providers table")) {
-          settingsState.focusedIndex = 3;
+          settingsState.focusedIndex = SETTINGS_ROWS.tables;
           settingsState.showProvidersTable = !settingsState.showProvidersTable;
           persistCurrentSettings();
           draw();
           return;
         }
         if (hasBox && line.includes("Projects table")) {
-          settingsState.focusedIndex = 4;
+          settingsState.focusedIndex = SETTINGS_ROWS.tables + 1;
           settingsState.showProjectsTable = !settingsState.showProjectsTable;
           persistCurrentSettings();
           draw();
@@ -687,7 +688,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         const cardSlot = line.match(/Card ([1-4]):/);
         if (cardSlot !== null) {
           const slot = Number(cardSlot[1]) - 1;
-          settingsState.focusedIndex = 6 + slot;
+          settingsState.focusedIndex = SETTINGS_ROWS.cards + slot;
           cycleCardSlot(slot);
           return;
         }
@@ -696,7 +697,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           (name) => (line.includes("◉") || line.includes("○")) && line.includes(name),
         );
         if (row !== -1) {
-          settingsState.focusedIndex = row;
+          settingsState.focusedIndex = SETTINGS_ROWS.providers + row;
           const prov = providers[row]!;
           if (settingsState.enabledProviders.has(prov)) {
             if (settingsState.enabledProviders.size > 1) {
@@ -718,7 +719,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const preset = REFRESH_PRESETS[Math.round(frac * (REFRESH_PRESETS.length - 1))]!;
           if (preset !== settingsState.refreshIntervalSeconds) {
             settingsState.refreshIntervalSeconds = preset;
-            settingsState.focusedIndex = 5;
+            settingsState.focusedIndex = SETTINGS_ROWS.refresh;
             applySettings();
             draw();
           }
@@ -898,7 +899,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       if (value.startsWith("\u001b[", i)) {
         if (value.startsWith("\u001b[Z", i)) {
           if (settingsState.visible) {
-            settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 10) % 10;
+            settingsState.focusedIndex =
+              (settingsState.focusedIndex - 1 + SETTINGS_ROWS.count) % SETTINGS_ROWS.count;
             draw();
           } else {
             selectCard(prevCard());
@@ -917,19 +919,20 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           const code = value[i + 2];
           if (settingsState.visible) {
             if (code === "A") {
-              settingsState.focusedIndex = (settingsState.focusedIndex - 1 + 10) % 10;
+              settingsState.focusedIndex =
+                (settingsState.focusedIndex - 1 + SETTINGS_ROWS.count) % SETTINGS_ROWS.count;
               draw();
               i += 3;
               continue;
             }
             if (code === "B") {
-              settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 10;
+              settingsState.focusedIndex = (settingsState.focusedIndex + 1) % SETTINGS_ROWS.count;
               draw();
               i += 3;
               continue;
             }
             if (code === "C") {
-              if (settingsState.focusedIndex === 5) {
+              if (settingsState.focusedIndex === SETTINGS_ROWS.refresh) {
                 const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, 1);
                 if (next !== settingsState.refreshIntervalSeconds) {
                   settingsState.refreshIntervalSeconds = next;
@@ -941,7 +944,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               continue;
             }
             if (code === "D") {
-              if (settingsState.focusedIndex === 5) {
+              if (settingsState.focusedIndex === SETTINGS_ROWS.refresh) {
                 const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, -1);
                 if (next !== settingsState.refreshIntervalSeconds) {
                   settingsState.refreshIntervalSeconds = next;
@@ -1059,8 +1062,11 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         }
         if (key === " ") {
           if (settingsState.visible) {
-            if (settingsState.focusedIndex >= 0 && settingsState.focusedIndex <= 2) {
-              const prov = ALL_KINDS[settingsState.focusedIndex]!;
+            if (
+              settingsState.focusedIndex >= SETTINGS_ROWS.providers &&
+              settingsState.focusedIndex < SETTINGS_ROWS.tables
+            ) {
+              const prov = ALL_KINDS[settingsState.focusedIndex - SETTINGS_ROWS.providers]!;
               if (settingsState.enabledProviders.has(prov)) {
                 if (settingsState.enabledProviders.size > 1) {
                   settingsState.enabledProviders.delete(prov);
@@ -1072,16 +1078,19 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
                 applySettings();
                 draw();
               }
-            } else if (settingsState.focusedIndex === 3) {
+            } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables) {
               settingsState.showProvidersTable = !settingsState.showProvidersTable;
               persistCurrentSettings();
               draw();
-            } else if (settingsState.focusedIndex === 4) {
+            } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables + 1) {
               settingsState.showProjectsTable = !settingsState.showProjectsTable;
               persistCurrentSettings();
               draw();
-            } else if (settingsState.focusedIndex >= 6 && settingsState.focusedIndex <= 9) {
-              cycleCardSlot(settingsState.focusedIndex - 6);
+            } else if (
+              settingsState.focusedIndex >= SETTINGS_ROWS.cards &&
+              settingsState.focusedIndex < SETTINGS_ROWS.refresh
+            ) {
+              cycleCardSlot(settingsState.focusedIndex - SETTINGS_ROWS.cards);
             }
           } else {
             // Settings panel closed: space toggles the focused table's collapse.
@@ -1093,7 +1102,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         }
         if (key === "\t" || key === "\u0009") {
           if (settingsState.visible) {
-            settingsState.focusedIndex = (settingsState.focusedIndex + 1) % 10;
+            settingsState.focusedIndex = (settingsState.focusedIndex + 1) % SETTINGS_ROWS.count;
           } else {
             const order: Array<"models" | "providers" | "projects"> = ["models", "providers", "projects"];
             const idx = order.indexOf(focusedTable);
@@ -1108,7 +1117,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "h" || key === "H") {
-          if (settingsState.focusedIndex === 5) {
+          if (settingsState.focusedIndex === SETTINGS_ROWS.refresh) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, -1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -1120,7 +1129,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "l" || key === "L") {
-          if (settingsState.focusedIndex === 5) {
+          if (settingsState.focusedIndex === SETTINGS_ROWS.refresh) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, 1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -1132,7 +1141,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "+" || key === "=") {
-          if (settingsState.focusedIndex === 5) {
+          if (settingsState.focusedIndex === SETTINGS_ROWS.refresh) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, 1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -1144,7 +1153,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "-" || key === "_") {
-          if (settingsState.focusedIndex === 5) {
+          if (settingsState.focusedIndex === SETTINGS_ROWS.refresh) {
             const next = adjustRefreshIntervalByPreset(settingsState.refreshIntervalSeconds, -1);
             if (next !== settingsState.refreshIntervalSeconds) {
               settingsState.refreshIntervalSeconds = next;
@@ -1156,8 +1165,11 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           continue;
         }
         if (key === "\r" || key === "\n") {
-          if (settingsState.focusedIndex >= 0 && settingsState.focusedIndex <= 2) {
-            const prov = ALL_KINDS[settingsState.focusedIndex]!;
+          if (
+            settingsState.focusedIndex >= SETTINGS_ROWS.providers &&
+            settingsState.focusedIndex < SETTINGS_ROWS.tables
+          ) {
+            const prov = ALL_KINDS[settingsState.focusedIndex - SETTINGS_ROWS.providers]!;
             if (settingsState.enabledProviders.has(prov)) {
               if (settingsState.enabledProviders.size > 1) {
                 settingsState.enabledProviders.delete(prov);
@@ -1169,11 +1181,11 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               applySettings();
               draw();
             }
-          } else if (settingsState.focusedIndex === 3) {
+          } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables) {
             settingsState.showProvidersTable = !settingsState.showProvidersTable;
             persistCurrentSettings();
             draw();
-          } else if (settingsState.focusedIndex === 4) {
+          } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables + 1) {
             settingsState.showProjectsTable = !settingsState.showProjectsTable;
             persistCurrentSettings();
             draw();
