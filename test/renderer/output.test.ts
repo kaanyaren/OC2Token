@@ -674,6 +674,7 @@ test("footer click tokens map to dashboard actions", () => {
   assert.deepEqual(footerClickAction("15m"), { card: "15m" });
   assert.deepEqual(footerClickAction("30m"), { card: "30m" });
   assert.deepEqual(footerClickAction("2h"), { card: "2h" });
+  assert.deepEqual(footerClickAction("5h"), { card: "5h" });
   assert.equal(footerClickAction("p"), "projects");
   assert.equal(footerClickAction("Proj"), "projects");
   assert.equal(footerClickAction("Projects"), "projects");
@@ -819,6 +820,15 @@ test("derived 2h prefers high-resolution range trends over sliced day buckets", 
   assert.equal(snapshot.derived["2h"].totals.input, 288);
 });
 
+test("derived 5h slices sixty five-minute day buckets", () => {
+  const snapshot = normalizeDashboardSnapshot(derivedFixture());
+  // 5h = last 60 five-minute day buckets x input 2.
+  assert.equal(snapshot.derived["5h"].trends.length, 60);
+  assert.equal(snapshot.derived["5h"].totals.input, 120);
+  assert.equal(snapshot.derived["5h"].unmeasured, undefined);
+  assert.equal(snapshot.derived["5h"].window.label, "last 5 hours");
+});
+
 test("derived sub-windows fall back to records when parent trends are absent", () => {
   const windows = Object.values(createUsageWindows(NOW, "UTC"));
   const input = {
@@ -877,6 +887,36 @@ test("visible cards choose the rendered card set and footer labels", () => {
   assert.match(legacy, /THIS WEEK/);
   assert.match(legacy, /LAST MONTH/);
   assert.doesNotMatch(legacy, /LAST 15 MINUTES/);
+});
+
+test("six visible cards render two rows of three with 1-6 footer keys", () => {
+  const input = derivedFixture();
+  const six = ["hour", "day", "week", "month", "2h", "5h"] as const;
+  const plain = renderDashboard(input, {
+    isTTY: false,
+    color: false,
+    width: 200,
+    selectedWindow: "5h",
+    visibleCards: [...six],
+  });
+  assert.match(plain, /LAST 5 HOURS/);
+  assert.match(plain, /LAST 2 HOURS/);
+  assert.match(plain, /Trend · last 5 hours/);
+  // Footer keys cover all six slots in order.
+  assert.match(plain, /1.*Hour.*2.*Today.*3.*Week.*4.*Month.*5.*2h.*6.*5h/s);
+  // Static key hints compress to 1-6 once slots 5-6 exist (help panel).
+  const helped = renderDashboard(input, {
+    isTTY: false,
+    color: false,
+    width: 100,
+    help: true,
+    selectedWindow: "day",
+    visibleCards: [...six],
+  });
+  assert.match(helped, /1-6/);
+  // Narrow terminals keep the 1/2/3/4 hint for the legacy four.
+  const narrow = renderDashboard(input, { isTTY: false, color: false, width: 55, selectedWindow: "day" });
+  assert.match(narrow, /1\/2\/3\/4/);
 });
 
 test("selecting a derived card shows its trend and breakdown scope", () => {
@@ -945,15 +985,38 @@ test("normalizeTrend retains per-bucket splits through the cache path", () => {
   assert.equal(once.windows.hour.trends[0]?.providers?.[0]?.totals.input, 3);
 });
 
-test("normalizeVisibleCards enforces exactly four distinct cards", () => {  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
+test("normalizeVisibleCards enforces four or six distinct cards", () => {  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
   assert.deepEqual(normalizeVisibleCards(null), ["hour", "day", "week", "month"]);
   assert.deepEqual(
     normalizeVisibleCards(["15m", "15m", "bogus", "day", "week", "month", "30m", "2h", "hour"]),
-    ["15m", "day", "week", "month"],
+    ["15m", "day", "week", "month", "30m", "2h"],
   );
   assert.deepEqual(normalizeVisibleCards(["2h"]), ["2h", "hour", "day", "week"]);
   assert.deepEqual(normalizeSettings({}).visibleCards, ["hour", "day", "week", "month"]);
   assert.deepEqual(normalizeSettings({ visibleCards: ["15m", "30m", "2h", "day"] }).visibleCards, ["15m", "30m", "2h", "day"]);
+  // Six valid kinds select the wide layout.
+  assert.deepEqual(
+    normalizeVisibleCards(["15m", "hour", "day", "week", "month", "30m"]),
+    ["15m", "hour", "day", "week", "month", "30m"],
+  );
+  // Five valid kinds round up to six rather than dropping a pick.
+  assert.deepEqual(
+    normalizeVisibleCards(["15m", "hour", "day", "week", "month"]),
+    ["15m", "hour", "day", "week", "month", "30m"],
+  );
+  // An explicit count overrides inference.
+  assert.deepEqual(
+    normalizeVisibleCards(["15m", "hour", "day", "week", "month", "30m"], 4),
+    ["15m", "hour", "day", "week"],
+  );
+  assert.deepEqual(
+    normalizeVisibleCards(["hour"], 6),
+    ["hour", "day", "week", "month", "15m", "30m"],
+  );
+  assert.deepEqual(
+    normalizeSettings({ visibleCards: ["hour", "day", "week", "month", "2h", "5h"] }).visibleCards,
+    ["hour", "day", "week", "month", "2h", "5h"],
+  );
 });
 
 test("settings panel lists the four card slots", () => {
@@ -972,10 +1035,13 @@ test("settings panel lists the four card slots", () => {
   });
   assert.match(plain, /Card 1: 15m/);
   assert.match(plain, /Card 4: Week/);
+  // Inactive slots still render (dimmed) so focus indices never shift.
+  assert.match(plain, /Card 6: 30m/);
+  assert.match(plain, /Cards shown: 4/);
 });
 
 test("settings focus index order follows the rendered row order", () => {
-  // Tab/arrows walk focusedIndex 0..9 linearly, so the index order must match
+  // Tab/arrows walk focusedIndex 0..12 linearly, so the index order must match
   // the order the panel draws its rows or navigation appears to skip rows.
   const focusedRow = (focusedIndex: number): string => {
     const plain = renderDashboard(fixture(), {
@@ -1011,6 +1077,9 @@ test("settings focus index order follows the rendered row order", () => {
     "Card 2: Hour",
     "Card 3: Today",
     "Card 4: Week",
+    "Card 5: Month",
+    "Card 6: 30m",
+    "Cards shown: 4",
     "Refresh interval · 5m",
   ]);
 });

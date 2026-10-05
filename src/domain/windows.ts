@@ -70,6 +70,8 @@ const MINUTE_MS = 60 * 1000;
 const THIRTY_SECONDS_MS = 30 * 1000;
 /** 75-second buckets: 96 per 2 hours. The 2h card's high-resolution range. */
 export const SEVENTY_FIVE_SECONDS_MS = 75 * 1000;
+/** 3-hour buckets: 56 per week (8 per day). The week graph's resolution. */
+const THREE_HOURS_MS = 3 * HOUR_MS;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const ISO_WEEK_DAYS = 7;
@@ -402,9 +404,10 @@ function trendBucketLabel(instant: Date, timezone: string, kind: UsageWindowKind
 /**
  * Build the stable trend intervals for a requested window. Calendar-day
  * buckets advance in elapsed time from the local-day bounds, which preserves
- * both missing and repeated hours on DST transition days. Week buckets use
- * local midnights, so a DST day changes the bucket duration without changing
- * the seven-day shape of the ISO week. Rolling-month buckets use elapsed days.
+ * both missing and repeated hours on DST transition days. Week buckets split
+ * each local-midnight day into eight 3-hour elapsed buckets, so a DST day
+ * only changes its final bucket's duration without changing the per-day
+ * rhythm. Rolling-month buckets use elapsed days.
  *
  * An explicit bucket duration overrides the per-kind default. The 2h
  * high-resolution range uses 75-second buckets on a synthetic day-kind
@@ -453,13 +456,23 @@ export function createUsageTrendBuckets(
   }
 
   const localStart = localDateAt(window.from, window.timezone);
+  // Eight 3-hour buckets per local day: 56 per week. Subdividing in elapsed
+  // time from each midnight keeps the per-day rhythm while a DST day only
+  // shortens/lengthens its final bucket. Costs ~49 extra per-bucket stats
+  // calls per refresh.
+  const weekBucketDuration = bucketDurationMs ?? THREE_HOURS_MS;
   for (let day = 0; day < ISO_WEEK_DAYS; day += 1) {
-    const fromLocal = addCivilDays(localStart, day);
-    const toLocal = addCivilDays(localStart, day + 1);
-    append(
-      instantAtLocal({ ...fromLocal, hour: 0, minute: 0, second: 0 }, window.timezone),
-      instantAtLocal({ ...toLocal, hour: 0, minute: 0, second: 0 }, window.timezone),
-    );
+    const dayStart = instantAtLocal(
+      { ...addCivilDays(localStart, day), hour: 0, minute: 0, second: 0 },
+      window.timezone,
+    ).getTime();
+    const dayEnd = instantAtLocal(
+      { ...addCivilDays(localStart, day + 1), hour: 0, minute: 0, second: 0 },
+      window.timezone,
+    ).getTime();
+    for (let cursor = dayStart; cursor < dayEnd; cursor += weekBucketDuration) {
+      append(new Date(cursor), new Date(Math.min(dayEnd, cursor + weekBucketDuration)));
+    }
   }
   return buckets;
 }

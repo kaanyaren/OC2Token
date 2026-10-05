@@ -145,6 +145,7 @@ function cardTitle(kind: DashboardCardKind): string {
     case "15m": return "LAST 15 MINUTES";
     case "30m": return "LAST 30 MINUTES";
     case "2h": return "LAST 2 HOURS";
+    case "5h": return "LAST 5 HOURS";
   }
 }
 
@@ -158,6 +159,7 @@ export function shortCardLabel(kind: DashboardCardKind): string {
     case "15m": return "15m";
     case "30m": return "30m";
     case "2h": return "2h";
+    case "5h": return "5h";
   }
 }
 
@@ -256,6 +258,29 @@ const CARD_LINES = 6;
 const CARD_GAP = 2;
 const FOUR_CARD_LAYOUT_MIN_WIDTH = CARD_MIN_WIDTH * 4 + CARD_GAP * 3;
 
+/**
+ * Top-card grid shared by the renderer and the mouse hit regions so clicks
+ * never drift from what is drawn. Four cards share one row when wide; six
+ * cards use two rows of three when wide, three rows of two on medium
+ * terminals, and stack when narrow.
+ */
+function cardGridColumns(contentWidth: number, count: number): { columns: number; cardWidth: number } {
+  if (contentWidth >= FOUR_CARD_LAYOUT_MIN_WIDTH) {
+    const columns = count > 4 ? 3 : 4;
+    return {
+      columns,
+      cardWidth: Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP * (columns - 1)) / columns)),
+    };
+  }
+  if (contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
+    return {
+      columns: 2,
+      cardWidth: Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP) / 2)),
+    };
+  }
+  return { columns: 1, cardWidth: Math.max(12, Math.min(CARD_MIN_WIDTH, contentWidth - 2)) };
+}
+
 export interface CardHitRegion {
   readonly kind: DashboardCardKind;
   readonly x1: number;
@@ -271,22 +296,12 @@ export function getCardHitRegions(
   const clamped = Math.max(20, width);
   const contentWidth = Math.max(1, clamped - APP_PADDING * 2);
   const headerHeight = HEADER_LINES;
-  if (contentWidth >= FOUR_CARD_LAYOUT_MIN_WIDTH) {
-    const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP * 3) / 4));
-    const y1 = headerHeight + 1;
-    const y2 = y1 + CARD_LINES - 1;
-    return kinds.map((kind, idx) => {
-      const x1 = APP_PADDING + idx * (cardWidth + CARD_GAP) + 1;
-      const x2 = x1 + cardWidth - 1;
-      return { kind, x1, y1, x2, y2 };
-    });
-  }
-  if (contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
-    const cardWidth = Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP) / 2));
+  if (contentWidth >= FOUR_CARD_LAYOUT_MIN_WIDTH || contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
+    const { columns, cardWidth } = cardGridColumns(contentWidth, kinds.length);
     const yGap = 0; // stacked rows touch — no blank separator (see renderDashboard)
     return kinds.map((kind, idx) => {
-      const column = idx % 2;
-      const row = Math.floor(idx / 2);
+      const column = idx % columns;
+      const row = Math.floor(idx / columns);
       const x1 = APP_PADDING + column * (cardWidth + CARD_GAP) + 1;
       const y1 = headerHeight + 1 + row * (CARD_LINES + yGap);
       return { kind, x1, y1, x2: x1 + cardWidth - 1, y2: y1 + CARD_LINES - 1 };
@@ -690,25 +705,42 @@ function renderSettingsPanel(
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
-  // Top cards heading (one row per card slot)
+  // Top cards heading (one row per card slot, then the shown-count toggle)
   const cardsHeading = truncate("Cards  —  space to cycle", inner);
   lines.push(padPrefix + `│${pad(themePurple(cardsHeading, color, true), inner)}│`);
 
   const visible = normalizeVisibleCards(settings.visibleCards);
-  for (let slot = 0; slot < 4; slot += 1) {
-    const kind = visible[slot]!;
+  // All six slot rows always render so focus indices never shift; slots at
+  // or past the visible count show the kind they would take, dimmed.
+  const fullSix = normalizeVisibleCards(settings.visibleCards, 6);
+  for (let slot = 0; slot < 6; slot += 1) {
+    const kind = fullSix[slot]!;
+    const active = slot < visible.length;
     const focused = settings.focusedIndex === SETTINGS_ROWS.cards + slot;
     const prefix = focused ? themeOrange("▶ ", color, true) : "  ";
-    const suffix = focused ? "  ← cycle" : "";
-    const suffixLen = focused ? 10 : 0; // "  ← cycle" visible length
+    const suffix = focused && active ? "  ← cycle" : "";
+    const suffixLen = suffix.length > 0 ? 10 : 0; // "  ← cycle" visible length
     const nameAvail = Math.max(4, inner - 4 - suffixLen);
     const label = `Card ${slot + 1}: ${shortCardLabel(kind)}`;
     const nameTrunc = truncate(label, nameAvail);
-    const nameColored = themeWhite(nameTrunc, color, true);
+    const nameColored = active ? themeWhite(nameTrunc, color, true) : themePurple(nameTrunc, color);
     const lineContent = `${prefix}${nameColored}`;
-    const full = focused ? `${lineContent}${themeOrange(suffix, color)}` : lineContent;
+    const full = suffix.length > 0 ? `${lineContent}${themeOrange(suffix, color)}` : lineContent;
     lines.push(padPrefix + `│${pad(full, inner)}│`);
   }
+
+  // Shown-count toggle (four or six cards)
+  const countFocused = settings.focusedIndex === SETTINGS_ROWS.cardCount;
+  const countPrefix = countFocused ? themeOrange("▶ ", color, true) : "  ";
+  const countSuffix = countFocused ? "  ← toggle" : "";
+  const countSuffixLen = countFocused ? 10 : 0; // "  ← toggle" visible length
+  const countAvail = Math.max(4, inner - 4 - countSuffixLen);
+  const countLabel = `Cards shown: ${visible.length}`;
+  const countTrunc = truncate(countLabel, countAvail);
+  const countColored = themeWhite(countTrunc, color, true);
+  const countContent = `${countPrefix}${countColored}`;
+  const countFull = countFocused ? `${countContent}${themeOrange(countSuffix, color)}` : countContent;
+  lines.push(padPrefix + `│${pad(countFull, inner)}│`);
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
@@ -792,6 +824,7 @@ function renderProjectsPanel(
   selected: DashboardCardKind,
   width: number,
   color: boolean,
+  visible: ReadonlyArray<DashboardCardKind> = [...DEFAULT_VISIBLE_CARDS],
 ): string[] {
   const selectedData = cardWindow(snapshot, selected);
   const windowProjects = selectedData.projects ?? [];
@@ -900,7 +933,7 @@ function renderProjectsPanel(
   }
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
-  lines.push(padPrefix + `│${pad(themePurple(truncate("p / esc to close  •  1/2/3/4 switch period", inner), color), inner)}│`);
+  lines.push(padPrefix + `│${pad(themePurple(truncate(`p / esc to close  •  ${visible.length > 4 ? "1-6" : "1/2/3/4"} switch period`, inner), color), inner)}│`);
   lines.push(padPrefix + paint(border(panelWidth, "╰", "─", "╯"), ANSI.purpleDeep, color));
   return lines;
 }
@@ -941,16 +974,19 @@ function renderFooter(
   visible: ReadonlyArray<DashboardCardKind> = [...DEFAULT_VISIBLE_CARDS],
 ): string[] {
   const key = (value: string): string => themeOrange(value, color, true);
-  // Period segment follows the visible cards: keys 1-4 select slots in order.
+  // Period segment follows the visible cards: keys 1-6 select slots in order.
   const periodWide = visible
     .map((kind, index) => `${key(String(index + 1))} ${shortCardLabel(kind)}`)
     .join("  ");
+  // Static key hints compress to the wide form once slots 5-6 exist.
+  const slotHint = visible.length > 4 ? "1-6" : "1/2/3/4";
+  const slotRange = visible.length > 4 ? "1-6" : "1-4";
   if (help) {
     if (width < 50) {
       return [
         "",
         panelHeading("Help", width, color, "orange"),
-        ` ${key("r")} refresh  ${key("1/2/3/4")} cards ${key("p")} projects`,
+        ` ${key("r")} refresh  ${key(slotHint)} cards ${key("p")} projects`,
         ` ${key("q")} quit  ${key("?")} close`,
       ];
     }
@@ -958,7 +994,7 @@ function renderFooter(
       return [
         "",
         panelHeading("Help", width, color, "orange"),
-        ` ${key("r/R")} Refresh   ${key("1-4")} Cards   ${key("Tab")} Next card/table`,
+        ` ${key("r/R")} Refresh   ${key(slotRange)} Cards   ${key("Tab")} Next card/table`,
         ` ${key("Space")} Collapse   ${key("p")} Projects   ${key("s")} Settings`,
         ` ${key("q")} Quit   ${key("?")} Close help`,
       ];
@@ -966,19 +1002,19 @@ function renderFooter(
     return [
       "",
       panelHeading("Help", width, color, "orange"),
-      `  ${key("r/R")} Refresh now   ${key("1-4")} Select visible card   ${key("Tab/Arrows")} Navigate cards`,
+      `  ${key("r/R")} Refresh now   ${key(slotRange)} Select visible card   ${key("Tab/Arrows")} Navigate cards`,
       `  ${key("Space")} Expand/collapse breakdown table   ${key("p")} Projects panel   ${key("s")} Settings`,
       `  Click: cards select · table headers/hints collapse · footer acts · ${key("q")} Quit   ${key("?")} Close help`,
       `  Settings: providers · tables · card slots (${periodWide}) · refresh slider`,
     ];
   }
   if (width < 50) {
-    return [` ${key("r")} ${key("1/2/3/4")} ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
+    return [` ${key("r")} ${key(slotHint)} ${key("p")} ${key("s")} ${key("q")} ${key("?")}`];
   }
   if (width < 70) {
     // Keep footer under 50 chars so width=50 still truncates correctly
     if (width < 60) {
-      return [` ${key("r")} Refresh  ${key("1/2/3/4")} ${key("p")} Proj ${key("s")} ${key("q")} Quit ${key("?")} Help`];
+      return [` ${key("r")} Refresh  ${key(slotHint)} ${key("p")} Proj ${key("s")} ${key("q")} Quit ${key("?")} Help`];
     }
     return [` ${key("r")} Refresh  ${key("1/2/3/4")} Periods  ${key("p")} Proj ${key("s")} ${key("q")} Quit ${key("?")} Help`];
   }
@@ -1006,7 +1042,7 @@ export type FooterClickAction =
   | "settings"
   | "quit"
   | "help"
-  /** Numeric keys 1-4 select a visible card slot in order. */
+  /** Numeric keys 1-6 select a visible card slot in order. */
   | { readonly slot: number }
   /** Named period tokens select a card kind directly. */
   | { readonly card: DashboardCardKind };
@@ -1025,6 +1061,8 @@ export function footerClickAction(token: string): FooterClickAction | undefined 
     case "2":
     case "3":
     case "4":
+    case "5":
+    case "6":
       return { slot: Number(token) - 1 };
     case "Hour":
       return { card: "hour" };
@@ -1040,6 +1078,8 @@ export function footerClickAction(token: string): FooterClickAction | undefined 
       return { card: "30m" };
     case "2h":
       return { card: "2h" };
+    case "5h":
+      return { card: "5h" };
     case "p":
     case "Proj":
     case "Projects":
@@ -1086,11 +1126,8 @@ export function renderDashboard(
   const selected = options.selectedWindow ?? "day";
   const visibleCards = normalizeVisibleCards(options.visibleCards);
   const lines = renderHeader(color, width);
-  const cardWidth = width >= FOUR_CARD_LAYOUT_MIN_WIDTH
-    ? Math.max(CARD_MIN_WIDTH, Math.floor((width - CARD_GAP * 3) / 4))
-    : width >= WIDE_LAYOUT_MIN_WIDTH
-      ? Math.max(CARD_MIN_WIDTH, Math.floor((width - CARD_GAP) / 2))
-      : Math.max(12, Math.min(CARD_MIN_WIDTH, width - 2));
+  const grid = cardGridColumns(width, visibleCards.length);
+  const cardWidth = grid.cardWidth;
   const cards = visibleCards.map((kind) => cardLines(
     kind,
     cardWindow(snapshot, kind),
@@ -1099,11 +1136,9 @@ export function renderDashboard(
     selected === kind,
   ));
 
-  if (width >= FOUR_CARD_LAYOUT_MIN_WIDTH) {
-    lines.push(...composeCards(cards));
-  } else if (width >= WIDE_LAYOUT_MIN_WIDTH) {
-    for (let index = 0; index < cards.length; index += 2) {
-      lines.push(...composeCards(cards.slice(index, index + 2)));
+  if (width >= FOUR_CARD_LAYOUT_MIN_WIDTH || width >= WIDE_LAYOUT_MIN_WIDTH) {
+    for (let index = 0; index < cards.length; index += grid.columns) {
+      lines.push(...composeCards(cards.slice(index, index + grid.columns)));
     }
   } else {
     for (const card of cards) lines.push(...card);
@@ -1151,7 +1186,7 @@ export function renderDashboard(
 
   if (options.projects?.visible === true) {
     footerBlock.push("");
-    footerBlock.push(...renderProjectsPanel(snapshot, selected, width, color));
+    footerBlock.push(...renderProjectsPanel(snapshot, selected, width, color, visibleCards));
   }
 
   footerBlock.push("");

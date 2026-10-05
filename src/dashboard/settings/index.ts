@@ -17,7 +17,12 @@ export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
 
 /**
  * Settings focus rows, numbered in the order the panel *renders* them:
- * providers (0-2) -> tables (3-4) -> card slots (5-8) -> refresh interval (9).
+ * providers (0-2) -> tables (3-4) -> card slots (5-10) -> card count (11)
+ * -> refresh interval (12).
+ *
+ * All six slot rows always render; slots at or past the visible count are
+ * dimmed placeholders so the indices below never shift when toggling
+ * between four and six cards.
  *
  * `focusedIndex` cycles these with Tab/arrows, so the index order must match
  * the render order or navigation appears to skip rows.
@@ -26,8 +31,9 @@ export const SETTINGS_ROWS = {
   providers: 0,
   tables: 3,
   cards: 5,
-  refresh: 9,
-  count: 10,
+  cardCount: 11,
+  refresh: 12,
+  count: 13,
 } as const;
 
 export interface DashboardSettings {
@@ -37,7 +43,7 @@ export interface DashboardSettings {
   readonly showProvidersTable?: boolean;
   /** Show the Projects breakdown table (default true for legacy files). */
   readonly showProjectsTable?: boolean;
-  /** Four visible top cards (default hour/day/week/month for legacy files). */
+  /** Four or six visible top cards (default hour/day/week/month for legacy files). */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
 }
 

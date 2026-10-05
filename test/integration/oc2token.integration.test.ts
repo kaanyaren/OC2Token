@@ -200,7 +200,7 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
   assert.deepEqual(transport.trendCalls, [
     ...Array.from({ length: 120 }, () => "hour" as const),
      ...Array.from({ length: 288 }, () => "day" as const),
-    ...Array.from({ length: 7 }, () => "week" as const),
+    ...Array.from({ length: 56 }, () => "week" as const),
     ...Array.from({ length: 240 }, () => "month" as const),
     // High-resolution 2h range: 96 buckets at 75 seconds (4x the 24 sliced
     // 5-minute day buckets), fetched after the day parent proves non-empty.
@@ -208,7 +208,7 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
   ]);
   assert.equal(result.trendsByWindow?.hour?.length, 120);
   assert.equal(result.trendsByWindow?.day?.length, 288);
-  assert.equal(result.trendsByWindow?.week?.length, 7);
+  assert.equal(result.trendsByWindow?.week?.length, 56);
   assert.equal(result.trendsByWindow?.month?.length, 240);
   assert.equal(result.trendsByRange?.length, 1);
   assert.equal(result.trendsByRange?.[0]?.trends.length, 96);
@@ -383,7 +383,7 @@ test("UnifiedUsageSource retains OpenCode stats totals and trends", async () => 
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);
   assert.equal(result.trendsByWindow?.hour?.length, 120);
   assert.equal(result.trendsByWindow?.day?.length, 288);
-  assert.equal(result.trendsByWindow?.week?.length, 7);
+  assert.equal(result.trendsByWindow?.week?.length, 56);
 });
 
 test("CachedUsageSource persists a partial result without presenting it as complete", async () => {

@@ -6,7 +6,7 @@ import type {
   UsageWindow,
   UsageWindowKind,
 } from "../../domain/index.js";
-import { USAGE_WINDOW_KINDS, SEVENTY_FIVE_SECONDS_MS } from "../../domain/index.js";
+import { USAGE_WINDOW_KINDS, SEVENTY_FIVE_SECONDS_MS, createUsageTrendBuckets } from "../../domain/index.js";
 import {
   costForTokens,
   estimatedCost,
@@ -69,7 +69,7 @@ export interface DashboardWindow {
  * in JSON/table/CLI output — the renderer derives them from already-collected
  * data (parent trend buckets first, records as fallback).
  */
-export const DERIVED_CARD_KINDS = ["15m", "30m", "2h"] as const;
+export const DERIVED_CARD_KINDS = ["15m", "30m", "2h", "5h"] as const;
 export type DerivedCardKind = (typeof DERIVED_CARD_KINDS)[number];
 
 /** Every card the dashboard can show: collected windows plus derived ones. */
@@ -84,6 +84,7 @@ export const CARD_KIND_ORDER: readonly DashboardCardKind[] = [
   "15m",
   "30m",
   "2h",
+  "5h",
 ];
 
 /** Legacy layout. New installs and legacy settings files start here. */
@@ -105,26 +106,33 @@ export function isDerivedCardKind(value: unknown): value is DerivedCardKind {
     (DERIVED_CARD_KINDS as readonly string[]).includes(value);
 }
 
+/** How many top cards render: the legacy four or the wide six. */
+export const VISIBLE_CARD_COUNTS = [4, 6] as const;
+export type VisibleCardCount = (typeof VISIBLE_CARD_COUNTS)[number];
+
 /**
- * Normalize a visible-cards list to exactly four distinct kinds. Legacy or
- * corrupt values fall back to the default layout; extras are dropped and gaps
- * are filled from the default order.
+ * Normalize a visible-cards list to exactly four or six distinct kinds. More
+ * than four valid kinds selects six (extras dropped past six); anything else
+ * selects four. Legacy or corrupt values fall back to the default layout;
+ * gaps are filled from the cycle order (whose first four entries are the
+ * legacy defaults).
  */
-export function normalizeVisibleCards(value: unknown): DashboardCardKind[] {
+export function normalizeVisibleCards(value: unknown, count?: VisibleCardCount): DashboardCardKind[] {
   const seen: DashboardCardKind[] = [];
   if (Array.isArray(value)) {
     for (const entry of value) {
       if (isDashboardCardKind(entry) && !seen.includes(entry)) {
         seen.push(entry);
       }
-      if (seen.length === 4) break;
     }
   }
-  for (const kind of DEFAULT_VISIBLE_CARDS) {
-    if (seen.length === 4) break;
-    if (!seen.includes(kind)) seen.push(kind);
+  const target: VisibleCardCount = count ?? (seen.length > 4 ? 6 : 4);
+  const trimmed = seen.slice(0, target);
+  for (const kind of CARD_KIND_ORDER) {
+    if (trimmed.length === target) break;
+    if (!trimmed.includes(kind)) trimmed.push(kind);
   }
-  return seen;
+  return trimmed;
 }
 
 export interface DashboardSnapshot {
@@ -157,7 +165,7 @@ export interface DashboardSettingsView {
   readonly showProvidersTable?: boolean;
   /** Show the Projects breakdown table. Undefined (legacy) means shown. */
   readonly showProjectsTable?: boolean;
-  /** Four visible top cards. Undefined (legacy) means hour/day/week/month. */
+  /** Four or six visible top cards. Undefined (legacy) means hour/day/week/month. */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
 }
 
@@ -506,33 +514,45 @@ function deriveTrends(
   // day grids use the same 75s grain as the collected 2h range (96 bars per
   // 2 hours) so the 2h card slices 96 bars from either source; the day graph
   // resamples to the same picture. Record grids cost no API calls, only
-  // in-memory buckets. The day cap covers a 25-hour DST day (1200 buckets).
+  // in-memory buckets. The day cap covers a 25-hour DST day (1200 buckets);
+  // the week cap covers a 169-hour DST week (57 buckets). The week grid is
+  // reused from createUsageTrendBuckets (midnight-anchored) so record
+  // assignment matches collected stats buckets exactly, including the
+  // irregular final bucket on DST transition days.
+  const weekGrid = kind === "week" ? createUsageTrendBuckets(window) : undefined;
   const bucketDuration = kind === "hour"
     ? 30 * 1000
     : kind === "day"
       ? SEVENTY_FIVE_SECONDS_MS
-      : kind === "month"
+      : kind === "week" || kind === "month"
         ? 3 * 60 * 60 * 1000
         : 24 * 60 * 60 * 1000;
-  const maxBucketCount = kind === "hour" ? 120 : kind === "day" ? 1200 : kind === "month" ? 240 : 7;
+  const maxBucketCount = kind === "hour" ? 120 : kind === "day" ? 1200 : kind === "week" ? 60 : kind === "month" ? 240 : 7;
   const bucketCount = Math.max(1, Math.min(maxBucketCount, Math.ceil(duration / bucketDuration)));
-  const values = Array.from({ length: bucketCount }, (_, index) => {
-    const from = new Date(window.from.getTime() + index * bucketDuration);
-    const to = new Date(Math.min(window.to.getTime(), from.getTime() + bucketDuration));
-    return {
-      label: bucketLabel(from, window.timezone, kind),
-      from,
-      to,
-      totals: {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        recorded_total: 0,
-      },
-    };
-  });
+  const values = weekGrid !== undefined
+    ? weekGrid.map((bucket) => ({
+      label: bucket.label,
+      from: new Date(bucket.from.getTime()),
+      to: new Date(bucket.to.getTime()),
+      totals: { ...zeroTotals() },
+    }))
+    : Array.from({ length: bucketCount }, (_, index) => {
+      const from = new Date(window.from.getTime() + index * bucketDuration);
+      const to = new Date(Math.min(window.to.getTime(), from.getTime() + bucketDuration));
+      return {
+        label: bucketLabel(from, window.timezone, kind),
+        from,
+        to,
+        totals: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          recorded_total: 0,
+        },
+      };
+    });
 
   for (const item of root.records) {
     const record = asRecord(item);
@@ -541,10 +561,13 @@ function deriveTrends(
     if (createdAt === null || !(createdAt instanceof Date)) continue;
     const timestamp = createdAt.getTime();
     if (timestamp < window.from.getTime() || timestamp >= window.to.getTime()) continue;
-    const index = Math.min(
-      values.length - 1,
-      Math.max(0, Math.floor((timestamp - window.from.getTime()) / bucketDuration)),
-    );
+    const index = weekGrid !== undefined
+      ? values.findIndex((bucket) => timestamp >= bucket.from.getTime() && timestamp < bucket.to.getTime())
+      : Math.min(
+        values.length - 1,
+        Math.max(0, Math.floor((timestamp - window.from.getTime()) / bucketDuration)),
+      );
+    if (index === -1) continue;
     const next = totalsFor(record);
     const current = values[index].totals;
     for (const component of COMPONENTS) current[component] += next[component];
@@ -785,6 +808,7 @@ const DERIVED_SPECS: readonly DerivedSpec[] = [
   { kind: "15m", minutes: 15, parent: "hour", label: "last 15 minutes" },
   { kind: "30m", minutes: 30, parent: "hour", label: "last 30 minutes" },
   { kind: "2h", minutes: 120, parent: "day", label: "last 2 hours" },
+  { kind: "5h", minutes: 300, parent: "day", label: "last 5 hours" },
 ];
 
 function bucketStart(bucket: TrendBucket): number | null {

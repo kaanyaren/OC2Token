@@ -124,7 +124,7 @@ Options:
   -h, --help             Show this help
   -v, --version          Show the version
 
-Dashboard keys: r refresh, 1/2/3/4 to select card, p projects, s settings, ? help, q quit. Mouse: click cards, footer actions, and settings rows.
+Dashboard keys: r refresh, 1-6 to select card, p projects, s settings, ? help, q quit. Mouse: click cards, footer actions, and settings rows.
 `;
 }
 
@@ -509,6 +509,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   /** Cycle a settings card slot to the next kind not used by another slot. */
   const cycleCardSlot = (slot: number): void => {
     const current = settingsState.visibleCards;
+    if (slot < 0 || slot >= current.length) return;
     const start = CARD_KIND_ORDER.indexOf(current[slot]!);
     for (let step = 1; step <= CARD_KIND_ORDER.length; step += 1) {
       const next = CARD_KIND_ORDER[(start + step) % CARD_KIND_ORDER.length]!;
@@ -522,6 +523,18 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         return;
       }
     }
+  };
+
+  /** Toggle the top cards between four and six visible slots. */
+  const toggleCardCount = (): void => {
+    const current = settingsState.visibleCards;
+    const updated = current.length > 4
+      ? normalizeVisibleCards(current.slice(0, 4))
+      : normalizeVisibleCards(current, 6);
+    settingsState.visibleCards = updated;
+    if (!updated.includes(selectedCard)) selectedCard = updated[0]!;
+    persistCurrentSettings();
+    draw();
   };
 
   const applySettings = (): void => {
@@ -685,11 +698,18 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           draw();
           return;
         }
-        const cardSlot = line.match(/Card ([1-4]):/);
+        const cardSlot = line.match(/Card ([1-6]):/);
         if (cardSlot !== null) {
           const slot = Number(cardSlot[1]) - 1;
-          settingsState.focusedIndex = SETTINGS_ROWS.cards + slot;
-          cycleCardSlot(slot);
+          if (slot < settingsState.visibleCards.length) {
+            settingsState.focusedIndex = SETTINGS_ROWS.cards + slot;
+            cycleCardSlot(slot);
+          }
+          return;
+        }
+        if (line.includes("Cards shown:")) {
+          settingsState.focusedIndex = SETTINGS_ROWS.cardCount;
+          toggleCardCount();
           return;
         }
         const providers = [...ALL_KINDS];
@@ -1009,7 +1029,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           i += 1;
           continue;
         }
-        if (key === "1" || key === "2" || key === "3" || key === "4") {
+        if (key === "1" || key === "2" || key === "3" || key === "4" || key === "5" || key === "6") {
           const kind = settingsState.visibleCards[Number(key) - 1];
           if (kind !== undefined) selectCard(kind);
           draw();
@@ -1088,9 +1108,11 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               draw();
             } else if (
               settingsState.focusedIndex >= SETTINGS_ROWS.cards &&
-              settingsState.focusedIndex < SETTINGS_ROWS.refresh
+              settingsState.focusedIndex < SETTINGS_ROWS.cards + 6
             ) {
               cycleCardSlot(settingsState.focusedIndex - SETTINGS_ROWS.cards);
+            } else if (settingsState.focusedIndex === SETTINGS_ROWS.cardCount) {
+              toggleCardCount();
             }
           } else {
             // Settings panel closed: space toggles the focused table's collapse.
@@ -1222,7 +1244,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           i += 1;
           continue;
         }
-        if (key === "1" || key === "2" || key === "3" || key === "4") {
+        if (key === "1" || key === "2" || key === "3" || key === "4" || key === "5" || key === "6") {
           const kind = settingsState.visibleCards[Number(key) - 1];
           if (kind !== undefined) selectCard(kind);
         }

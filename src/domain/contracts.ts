@@ -61,7 +61,7 @@ export interface UsageTrendBucket extends UsageBucket {
 }
 
 /**
- * Per-project splits for a dashboard-only sub-range (15m/30m/2h), fetched
+ * Per-project splits for a dashboard-only sub-range (15m/30m/2h/5h), fetched
  * with one stats call per project for that exact range. Range-keyed instead
  * of window-kind-keyed so the domain never learns UI card kinds; the
  * renderer matches derived ranges by exact from/to instants.

@@ -262,7 +262,7 @@ export class OpenCodeStatsSource implements UsageSource {
       }
     }
 
-    // Per-project splits for dashboard-only sub-ranges (15m/30m/2h). One
+    // Per-project splits for dashboard-only sub-ranges (15m/30m/2h/5h). One
     // stats call per project per range — bounded by the project count, and
     // skipped when the parent window is empty. Per-project failures are
     // isolated inside collectProjectBreakdowns (range mismatch included),
@@ -275,6 +275,7 @@ export class OpenCodeStatsSource implements UsageSource {
         { minutes: 15, parent: totalsByWindow["hour"] },
         { minutes: 30, parent: totalsByWindow["hour"] },
         { minutes: 120, parent: totalsByWindow["day"] },
+        { minutes: 300, parent: totalsByWindow["day"] },
       ];
       for (const { minutes, parent } of ranges) {
         throwIfAborted(request.signal);
