@@ -258,6 +258,52 @@ test("mergeTrends carries per-bucket splits from exact supplied buckets", async 
   assert.equal(first.models?.[0]?.name, "space-bunny-free");
 });
 
+test("unified result merges range-keyed trends and folds record providers", async () => {
+  const wins = windows();
+  const split = (name: string, input: number) => ({
+    name,
+    totals: toUsageTotals({ input, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }),
+  });
+  const from = new Date("2026-09-02T08:00:00.000Z");
+  const to = NOW;
+  const grid = createUsageTrendBuckets({ ...wins[1]!, from, to }, 75 * 1000);
+  assert.equal(grid.length, 96);
+  const statsResult: CollectionResult = {
+    capturedAt: NOW,
+    windows: wins,
+    source: "stats",
+    records: [],
+    totalsByWindow: {},
+    trendsByRange: [{
+      from,
+      to,
+      trends: grid.map((bucket) => ({
+        ...bucket,
+        totals: toUsageTotals({ input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }),
+        providers: [split("opencode-go", 10)],
+      })),
+    }],
+    coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
+  };
+  const unified = new UnifiedUsageSource(
+    sourceReturning(statsResult),
+    sourceReturning(fixtureResult("codex", 22)),
+    sourceReturning(emptyProviderResult("antigravity")),
+  );
+  const result = await unified.collect(request());
+  assert.equal(result.trendsByRange?.length, 1);
+  const trends = result.trendsByRange?.[0]?.trends ?? [];
+  assert.equal(trends.length, 96);
+  // The codex record at 09:55 folds into its 75s bucket; others stay stats-only.
+  const hit = trends.find((bucket) =>
+    bucket.from.getTime() <= new Date("2026-09-02T09:55:00.000Z").getTime() &&
+    new Date("2026-09-02T09:55:00.000Z").getTime() < bucket.to.getTime());
+  assert.equal(hit?.totals.input, 32);
+  assert.equal(trends[0]?.totals.input, 10);
+  // Per-bucket stats splits survive the merge.
+  assert.equal(trends[0]?.providers?.[0]?.name, "opencode-go");
+});
+
 test("unified result merges range-keyed project splits by exact instants", async () => {
   const wins = windows();
   const split = (name: string, input: number) => ({

@@ -6,7 +6,7 @@ import type {
   UsageWindow,
   UsageWindowKind,
 } from "../../domain/index.js";
-import { USAGE_WINDOW_KINDS } from "../../domain/index.js";
+import { USAGE_WINDOW_KINDS, SEVENTY_FIVE_SECONDS_MS } from "../../domain/index.js";
 import {
   costForTokens,
   estimatedCost,
@@ -502,15 +502,19 @@ function deriveTrends(
   if (!Array.isArray(root.records)) return [];
   const duration = window.to.getTime() - window.from.getTime();
   // Mirrors createUsageTrendBuckets: 30s hour and 3h month buckets keep
-  // record-built trends interchangeable with collected ones.
+  // record-built trends interchangeable with collected ones. Record-built
+  // day grids use the same 75s grain as the collected 2h range (96 bars per
+  // 2 hours) so the 2h card slices 96 bars from either source; the day graph
+  // resamples to the same picture. Record grids cost no API calls, only
+  // in-memory buckets. The day cap covers a 25-hour DST day (1200 buckets).
   const bucketDuration = kind === "hour"
     ? 30 * 1000
     : kind === "day"
-      ? 5 * 60 * 1000
+      ? SEVENTY_FIVE_SECONDS_MS
       : kind === "month"
         ? 3 * 60 * 60 * 1000
         : 24 * 60 * 60 * 1000;
-  const maxBucketCount = kind === "hour" ? 120 : kind === "day" ? 288 : kind === "month" ? 240 : 7;
+  const maxBucketCount = kind === "hour" ? 120 : kind === "day" ? 1200 : kind === "month" ? 240 : 7;
   const bucketCount = Math.max(1, Math.min(maxBucketCount, Math.ceil(duration / bucketDuration)));
   const values = Array.from({ length: bucketCount }, (_, index) => {
     const from = new Date(window.from.getTime() + index * bucketDuration);
@@ -814,13 +818,40 @@ function rangeProjectSplits(
 }
 
 /**
+ * Find collected high-resolution trends for an exact sub-range. Instants
+ * must match to the millisecond: a near-miss is a different range, not
+ * evidence. Mirrors rangeProjectSplits for the trendsByRange payload.
+ */
+function rangeTrendsFor(
+  root: UnknownRecord,
+  from: Date,
+  to: Date,
+): ReadonlyArray<TrendBucket> | undefined {
+  const ranges = root.trendsByRange;
+  if (!Array.isArray(ranges)) return undefined;
+  for (const entry of ranges) {
+    const record = asRecord(entry);
+    const entryFrom = asDate(record.from);
+    const entryTo = asDate(record.to);
+    if (entryFrom === null || entryTo === null) continue;
+    if (new Date(entryFrom).getTime() !== from.getTime()) continue;
+    if (new Date(entryTo).getTime() !== to.getTime()) continue;
+    const trends = normalizeTrends(record.trends);
+    if (trends.length === 0) continue;
+    return trends;
+  }
+  return undefined;
+}
+
+/**
  * Derive a dashboard-only sub-window from already-collected data. Totals and
- * trends prefer the parent window's trend buckets (consistent across stats
- * and record sources, since mergeTrends/deriveTrends aggregate all sources);
- * records are the fallback when the parent has no buckets. Splits union
- * bucket/range evidence with record evidence; projects match range-fetched
- * stats splits by exact instants. Returns unmeasured when neither source has
- * evidence in range.
+ * trends prefer collected high-resolution range trends when their instants
+ * match exactly, then the parent window's trend buckets (consistent across
+ * stats and record sources, since mergeTrends/deriveTrends aggregate all
+ * sources); records are the fallback when the parent has no buckets. Splits
+ * union bucket/range evidence with record evidence; projects match
+ * range-fetched stats splits by exact instants. Returns unmeasured when
+ * neither source has evidence in range.
  *
  * `now` is the capture instant (the rolling hour's end), NOT the parent
  * window's end: calendar windows (day/week) end at a future midnight.
@@ -842,6 +873,10 @@ function deriveSubWindow(
   });
   const inRangeHasData = inRange.some((bucket) => bucket.totals.recorded_total > 0);
   const parentHasData = parent.trends.some((bucket) => bucket.totals.recorded_total > 0);
+  // Collected high-resolution range trends (the 2h card's 75s buckets) take
+  // precedence over sliced parent buckets when their instants match exactly.
+  const ranged = rangeTrendsFor(root, from, to);
+  const rangedHasData = ranged?.some((bucket) => bucket.totals.recorded_total > 0) ?? false;
 
   let recordCount = 0;
   if (Array.isArray(root.records)) {
@@ -857,7 +892,7 @@ function deriveSubWindow(
 
   // In-range zeros are observed zeros (measured) when the parent shows
   // activity anywhere; otherwise with no records the range is unmeasured.
-  const measured = inRangeHasData || recordCount > 0 || (parentHasData && inRange.length > 0);
+  const measured = inRangeHasData || rangedHasData || recordCount > 0 || (parentHasData && (inRange.length > 0 || ranged !== undefined));
   if (!measured) {
     return {
       window: synthWindow,
@@ -870,17 +905,18 @@ function deriveSubWindow(
     };
   }
 
-  // Parent buckets aggregate all sources consistently; record-built buckets
-  // cover the parent-bucket gap. Either way totals sum the trends shown.
-  const trends = inRange.length > 0 ? inRange : deriveTrends(root, spec.parent, synthWindow);
+  // Range trends aggregate all sources consistently when present; parent
+  // buckets do the same otherwise; record-built buckets cover the
+  // parent-bucket gap. Either way totals sum the trends shown.
+  const trends = ranged ?? (inRange.length > 0 ? inRange : deriveTrends(root, spec.parent, synthWindow));
   const totals = sumTotals(trends.map((bucket) => bucket.totals));
   // Splits union bucket evidence (stats providers) with record evidence
   // (file providers). Bucket splits alone would erase record providers in a
   // mixed range; records alone would erase stats providers. Projects union
   // range-fetched stats splits (matched by exact instants) with records;
   // without either, the split is honestly empty rather than fabricated.
-  const bucketModels = inRange.flatMap((bucket) => bucket.models ?? []);
-  const bucketProviders = inRange.flatMap((bucket) => bucket.providers ?? []);
+  const bucketModels = trends.flatMap((bucket) => bucket.models ?? []);
+  const bucketProviders = trends.flatMap((bucket) => bucket.providers ?? []);
   const rangeProjects = rangeProjectSplits(root, from, to);
   const models = unionBreakdowns([bucketModels, recordsAsBreakdown(root, "model", synthWindow)]);
   const providers = unionBreakdowns([bucketProviders, recordsAsBreakdown(root, "provider", synthWindow)]);

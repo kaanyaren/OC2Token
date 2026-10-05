@@ -68,6 +68,8 @@ type CivilDateTime = Readonly<CivilDate & { hour: number; minute: number; second
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const THIRTY_SECONDS_MS = 30 * 1000;
+/** 75-second buckets: 96 per 2 hours. The 2h card's high-resolution range. */
+export const SEVENTY_FIVE_SECONDS_MS = 75 * 1000;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const ISO_WEEK_DAYS = 7;
@@ -403,8 +405,16 @@ function trendBucketLabel(instant: Date, timezone: string, kind: UsageWindowKind
  * both missing and repeated hours on DST transition days. Week buckets use
  * local midnights, so a DST day changes the bucket duration without changing
  * the seven-day shape of the ISO week. Rolling-month buckets use elapsed days.
+ *
+ * An explicit bucket duration overrides the per-kind default. The 2h
+ * high-resolution range uses 75-second buckets on a synthetic day-kind
+ * window; the override keeps that grid aligned to the range start instead of
+ * the parent window's midnight grid.
  */
-export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBucket[] {
+export function createUsageTrendBuckets(
+  window: UsageWindow,
+  bucketDurationMs?: number,
+): readonly UsageBucket[] {
   assertTimeZone(window.timezone);
   assertWindowRange(window.from, window.to, window.kind);
 
@@ -424,7 +434,7 @@ export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBuck
   if (window.kind === "hour") {
     // Thirty-second buckets: 120 per hour. Fine enough for the derived 15m
     // range (30 bars) while the hour graph resamples to the same picture.
-    const bucketDuration = THIRTY_SECONDS_MS;
+    const bucketDuration = bucketDurationMs ?? THIRTY_SECONDS_MS;
     for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
       append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
     }
@@ -435,7 +445,7 @@ export function createUsageTrendBuckets(window: UsageWindow): readonly UsageBuck
     // Three-hour month buckets: 240 per 30 days. Fine enough to see structure
     // inside multi-day usage while the month graph resamples to the same
     // picture. Costs ~210 extra per-bucket stats calls per refresh.
-    const bucketDuration = window.kind === "day" ? FIVE_MINUTES_MS : DAY_MS / 8;
+    const bucketDuration = bucketDurationMs ?? (window.kind === "day" ? FIVE_MINUTES_MS : DAY_MS / 8);
     for (let cursor = window.from.getTime(); cursor < window.to.getTime(); cursor += bucketDuration) {
       append(new Date(cursor), new Date(Math.min(window.to.getTime(), cursor + bucketDuration)));
     }

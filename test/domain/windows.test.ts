@@ -104,6 +104,19 @@ test("trend buckets partition each requested window", () => {
   }
 });
 
+test("trend bucket override builds a 96-bucket 2h grid at 75 seconds", () => {
+  const windows = createUsageWindows(instant("2026-09-02T10:00:00.000Z"), "UTC");
+  const from = new Date(Date.parse("2026-09-02T08:00:00.000Z"));
+  const to = new Date(Date.parse("2026-09-02T10:00:00.000Z"));
+  const buckets = createUsageTrendBuckets({ ...windows.day, from, to }, 75 * 1000);
+  assert.equal(buckets.length, 96);
+  assert.equal(buckets[0]?.from.getTime(), from.getTime());
+  assert.equal(buckets.at(-1)?.to.getTime(), to.getTime());
+  for (const bucket of buckets) {
+    assert.equal(bucket.to.getTime() - bucket.from.getTime(), 75 * 1000);
+  }
+});
+
 test("trend buckets preserve missing and repeated DST hours", () => {
   const spring = createUsageTrendBuckets(createUsageWindow(
     "day",

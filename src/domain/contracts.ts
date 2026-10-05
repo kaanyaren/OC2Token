@@ -72,6 +72,19 @@ export interface RangeProjectSplits {
   readonly projects: ReadonlyArray<UsageBreakdown>;
 }
 
+/**
+ * High-resolution trend buckets for a dashboard-only sub-range (currently
+ * the 2h card), fetched with one stats call per bucket at a finer grain
+ * than the parent window's buckets. Range-keyed like RangeProjectSplits so
+ * the domain never learns UI card kinds; the renderer matches derived
+ * ranges by exact from/to instants.
+ */
+export interface RangeTrends {
+  readonly from: Date;
+  readonly to: Date;
+  readonly trends: ReadonlyArray<UsageTrendBucket>;
+}
+
 export type UsageTrendsByWindow = Readonly<
   Partial<Record<UsageWindowKind, ReadonlyArray<UsageTrendBucket>>>
 >;
@@ -119,6 +132,8 @@ export interface CollectionResult {
   readonly trendsByWindow?: UsageTrendsByWindow;
   /** Per-project splits for dashboard-only sub-ranges (stats sources only). */
   readonly projectSplitsByRange?: ReadonlyArray<RangeProjectSplits>;
+  /** High-resolution trends for dashboard-only sub-ranges (stats sources only). */
+  readonly trendsByRange?: ReadonlyArray<RangeTrends>;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;
@@ -149,6 +164,8 @@ export interface StoredSnapshot {
   readonly trendsByWindow?: UsageTrendsByWindow;
   /** Per-project splits for dashboard-only sub-ranges (stats sources only). */
   readonly projectSplitsByRange?: ReadonlyArray<RangeProjectSplits>;
+  /** High-resolution trends for dashboard-only sub-ranges (stats sources only). */
+  readonly trendsByRange?: ReadonlyArray<RangeTrends>;
   readonly coverage: Coverage;
   readonly serverFingerprint?: string;
   readonly serverVersion?: string;

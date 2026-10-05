@@ -14,6 +14,7 @@ import {
   type CollectionResult,
   type CollectionError,
   type Coverage,
+  type RangeTrends,
   type StoredSnapshot,
   type UsageSource,
   type ProviderKind,
@@ -289,6 +290,80 @@ function mergeTrends(
     merged[window.kind] = buckets;
   }
   return merged as UsageTrendsByWindow;
+}
+
+/**
+ * Merge range-keyed high-resolution trends (currently the 2h range) across
+ * providers. The first supplier defines the canonical bucket grid — all
+ * suppliers share the request's capturedAt so their grids align — while
+ * providers without exact buckets for the range fold their records per
+ * bucket, exactly like mergeTrends. Without record folding a stats-only
+ * range would erase file-provider usage from the derived card.
+ */
+function mergeRangeTrends(
+  successful: ReadonlyArray<{ readonly provider: ProviderKind; readonly result: CollectionResult }>,
+  request: CollectionRequest,
+): RangeTrends[] | undefined {
+  if (successful.length === 0) return undefined;
+  const baseWindow = request.windows.find((candidate) => candidate.kind === "day") ?? request.windows[0];
+  if (baseWindow === undefined) return undefined;
+
+  const ranges = new Map<string, { from: Date; to: Date }>();
+  for (const { result } of successful) {
+    for (const range of result.trendsByRange ?? []) {
+      const key = `${range.from.getTime()}\0${range.to.getTime()}`;
+      if (!ranges.has(key)) ranges.set(key, { from: range.from, to: range.to });
+    }
+  }
+  if (ranges.size === 0) return undefined;
+
+  const merged: RangeTrends[] = [];
+  for (const { from, to } of ranges.values()) {
+    const template = successful
+      .map(({ result }) => result.trendsByRange?.find(
+        (range) => range.from.getTime() === from.getTime() && range.to.getTime() === to.getTime(),
+      ))
+      .find((range) => range !== undefined && range.trends.length > 0);
+    if (template === undefined) continue;
+    const buckets = template.trends.map((bucket, index) => {
+      let totals = emptyUsageTotals();
+      const modelSplits: Array<UsageBreakdown> = [];
+      const providerSplits: Array<UsageBreakdown> = [];
+      for (const { result } of successful) {
+        const range = result.trendsByRange?.find(
+          (candidate) => candidate.from.getTime() === from.getTime() && candidate.to.getTime() === to.getTime(),
+        );
+        const supplied = range?.trends[index];
+        const exact = supplied !== undefined &&
+          supplied.from.getTime() === bucket.from.getTime() &&
+          supplied.to.getTime() === bucket.to.getTime();
+        if (exact) {
+          totals = addUsageTotals(totals, supplied.totals);
+          if (supplied.models !== undefined) modelSplits.push(...supplied.models);
+          if (supplied.providers !== undefined) providerSplits.push(...supplied.providers);
+          continue;
+        }
+        const sourceTotals = sumUsageRecords(result.records, {
+          ...baseWindow,
+          from: new Date(bucket.from.getTime()),
+          to: new Date(bucket.to.getTime()),
+          label: bucket.label,
+        });
+        totals = addUsageTotals(totals, sourceTotals);
+      }
+      return {
+        label: bucket.label,
+        from: new Date(bucket.from.getTime()),
+        to: new Date(bucket.to.getTime()),
+        totals,
+        ...(modelSplits.length === 0 ? {} : { models: mergeBreakdowns(modelSplits) }),
+        ...(providerSplits.length === 0 ? {} : { providers: mergeBreakdowns(providerSplits) }),
+      };
+    });
+    merged.push({ from, to, trends: buckets });
+  }
+  merged.sort((left, right) => left.from.getTime() - right.from.getTime());
+  return merged.length === 0 ? undefined : merged;
 }
 
 /**
@@ -685,6 +760,7 @@ export class UnifiedUsageSource implements UsageSource {
       }
     }
     const projectSplitsByRange = [...splitsByRange.values()].sort((a, b) => a.from.getTime() - b.from.getTime());
+    const trendsByRange = mergeRangeTrends(successful, request);
 
     return {
       capturedAt: new Date(request.capturedAt.getTime()),
@@ -707,6 +783,7 @@ export class UnifiedUsageSource implements UsageSource {
         : {}),
       ...(trendsByWindow === undefined ? {} : { trendsByWindow }),
       ...(projectSplitsByRange.length === 0 ? {} : { projectSplitsByRange }),
+      ...(trendsByRange === undefined || trendsByRange.length === 0 ? {} : { trendsByRange }),
       coverage,
       ...(serverFingerprint === undefined ? {} : { serverFingerprint }),
       ...(serverVersion === undefined ? {} : { serverVersion }),
@@ -753,6 +830,7 @@ export class CachedUsageSource implements UsageSource {
       ...(result.projectsByWindow === undefined ? {} : { projectsByWindow: result.projectsByWindow }),
       ...(result.trendsByWindow === undefined ? {} : { trendsByWindow: result.trendsByWindow }),
       ...(result.projectSplitsByRange === undefined ? {} : { projectSplitsByRange: result.projectSplitsByRange }),
+      ...(result.trendsByRange === undefined ? {} : { trendsByRange: result.trendsByRange }),
       coverage: result.coverage,
       ...(result.serverFingerprint === undefined ? {} : { serverFingerprint: result.serverFingerprint }),
       ...(result.serverVersion === undefined ? {} : { serverVersion: result.serverVersion }),
@@ -809,6 +887,7 @@ export async function readCachedSnapshot(
       ...(snapshot.projectsByWindow === undefined ? {} : { projectsByWindow: snapshot.projectsByWindow }),
       ...(snapshot.trendsByWindow === undefined ? {} : { trendsByWindow: snapshot.trendsByWindow }),
       ...(snapshot.projectSplitsByRange === undefined ? {} : { projectSplitsByRange: snapshot.projectSplitsByRange }),
+      ...(snapshot.trendsByRange === undefined ? {} : { trendsByRange: snapshot.trendsByRange }),
       coverage: snapshot.coverage,
       ...(snapshot.serverFingerprint === undefined ? {} : { serverFingerprint: snapshot.serverFingerprint }),
       ...(snapshot.serverVersion === undefined ? {} : { serverVersion: snapshot.serverVersion }),

@@ -202,11 +202,16 @@ test("HybridUsageSource uses stats when every requested range is exact", async (
      ...Array.from({ length: 288 }, () => "day" as const),
     ...Array.from({ length: 7 }, () => "week" as const),
     ...Array.from({ length: 240 }, () => "month" as const),
+    // High-resolution 2h range: 96 buckets at 75 seconds (4x the 24 sliced
+    // 5-minute day buckets), fetched after the day parent proves non-empty.
+    ...Array.from({ length: 96 }, () => "day" as const),
   ]);
   assert.equal(result.trendsByWindow?.hour?.length, 120);
   assert.equal(result.trendsByWindow?.day?.length, 288);
   assert.equal(result.trendsByWindow?.week?.length, 7);
   assert.equal(result.trendsByWindow?.month?.length, 240);
+  assert.equal(result.trendsByRange?.length, 1);
+  assert.equal(result.trendsByRange?.[0]?.trends.length, 96);
   assert.equal(transport.sessionCalls.length, 0);
   assert.equal(result.totalsByWindow.hour?.recorded_total, 101);
   assert.equal(result.totalsByWindow.day?.recorded_total, 102);

@@ -802,6 +802,23 @@ test("derived sub-windows sum parent trend buckets", () => {
   assert.equal(snapshot.derived["15m"].unmeasured, undefined);
 });
 
+test("derived 2h prefers high-resolution range trends over sliced day buckets", () => {
+  const base = derivedFixture();
+  const from = new Date("2026-09-02T08:00:00.000Z");
+  const input = {
+    ...base,
+    trendsByRange: [
+      { from, to: NOW, trends: minuteBuckets(from, 96, 1.25, 3) },
+      // Near-miss range must not match.
+      { from: new Date("2026-09-02T07:59:00.000Z"), to: NOW, trends: minuteBuckets(from, 96, 1.25, 999) },
+    ],
+  };
+  const snapshot = normalizeDashboardSnapshot(input);
+  // 96 buckets at 75s x input 3, not 24 sliced 5-minute buckets x input 2.
+  assert.equal(snapshot.derived["2h"].trends.length, 96);
+  assert.equal(snapshot.derived["2h"].totals.input, 288);
+});
+
 test("derived sub-windows fall back to records when parent trends are absent", () => {
   const windows = Object.values(createUsageWindows(NOW, "UTC"));
   const input = {
@@ -821,6 +838,8 @@ test("derived sub-windows fall back to records when parent trends are absent", (
   assert.equal(snapshot.derived["15m"].unmeasured, undefined);
   // Both records fall in [08:00,10:00).
   assert.equal(snapshot.derived["2h"].totals.input, 12);
+  // Record-built 2h grid uses 75s buckets: 96 bars, not 24.
+  assert.equal(snapshot.derived["2h"].trends.length, 96);
   // Breakdowns derive from the same records.
   assert.equal(snapshot.derived["15m"].models.length, 1);
   assert.equal(snapshot.derived["15m"].models[0]?.totals.input, 7);

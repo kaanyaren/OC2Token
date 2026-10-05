@@ -8,11 +8,13 @@ import {
   type OpenCodeSessionStats,
   type OpenCodeTransport,
   type RangeProjectSplits,
+  type RangeTrends,
   type UsageBreakdown,
   type UsageSource,
   type UsageTotals,
   type UsageWindowKind,
   type UsageBreakdownsByWindow,
+  SEVENTY_FIVE_SECONDS_MS,
   createUsageTrendBuckets,
   type UsageTrendBucket,
   type UsageTrendsByWindow,
@@ -128,8 +130,9 @@ async function collectTrendBuckets(
   transport: OpenCodeTransport,
   window: CollectionRequest["windows"][number],
   options: StatsRequestOptions,
+  bucketDurationMs?: number,
 ): Promise<readonly UsageTrendBucket[]> {
-  const buckets = createUsageTrendBuckets(window);
+  const buckets = createUsageTrendBuckets(window, bucketDurationMs);
   const results: Array<UsageTrendBucket | undefined> = new Array(buckets.length);
   let nextIndex = 0;
 
@@ -266,8 +269,8 @@ export class OpenCodeStatsSource implements UsageSource {
     // so a short range degrades to records-only splits instead of failing
     // the refresh. The renderer matches these by exact from/to instants.
     const projectSplitsByRange: RangeProjectSplits[] = [];
+    const now = request.capturedAt.getTime();
     if (allProjects.length > 0) {
-      const now = request.capturedAt.getTime();
       const ranges = [
         { minutes: 15, parent: totalsByWindow["hour"] },
         { minutes: 30, parent: totalsByWindow["hour"] },
@@ -288,6 +291,30 @@ export class OpenCodeStatsSource implements UsageSource {
       }
     }
 
+    // High-resolution trends for the dashboard-only 2h card: 96 buckets at
+    // 75 seconds instead of 24 sliced day buckets at 5 minutes. Skipped when
+    // the day parent is empty so an idle day costs no extra calls; per-bucket
+    // failures degrade to a gapped (partial) range like window trends. The
+    // renderer matches this by exact from/to instants and falls back to
+    // slicing the parent day buckets when it is absent (old caches).
+    const trendsByRange: RangeTrends[] = [];
+    {
+      throwIfAborted(request.signal);
+      const dayParent = totalsByWindow["day"];
+      const dayWindow = request.windows.find((candidate) => candidate.kind === "day");
+      if (dayWindow !== undefined && dayParent !== undefined && dayParent.recorded_total > 0) {
+        const from = new Date(now - 120 * 60 * 1000);
+        const to = new Date(now);
+        const trends = await collectTrendBuckets(
+          this.transport,
+          { ...dayWindow, from, to, label: "last 120 minutes" },
+          { project: request.project, signal: request.signal },
+          SEVENTY_FIVE_SECONDS_MS,
+        );
+        if (trends.length > 0) trendsByRange.push({ from, to, trends: [...trends] });
+      }
+    }
+
     throwIfAborted(request.signal);
     return {
       capturedAt: new Date(request.capturedAt.getTime()),
@@ -303,6 +330,7 @@ export class OpenCodeStatsSource implements UsageSource {
       ...(Object.keys(projectsByWindow).length === 0 ? {} : { projectsByWindow: projectsByWindow as UsageBreakdownsByWindow }),
       ...(Object.keys(trendsByWindow).length === 0 ? {} : { trendsByWindow: trendsByWindow as UsageTrendsByWindow }),
       ...(projectSplitsByRange.length === 0 ? {} : { projectSplitsByRange }),
+      ...(trendsByRange.length === 0 ? {} : { trendsByRange }),
       coverage: completeStatsCoverage,
       serverFingerprint: health.fingerprint,
       serverVersion: health.version,
