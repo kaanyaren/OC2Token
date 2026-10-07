@@ -919,6 +919,17 @@ test("six visible cards render two rows of three with 1-6 footer keys", () => {
   assert.match(narrow, /1\/2\/3\/4/);
 });
 
+test("the same card twice renders twice", () => {
+  const plain = renderDashboard(derivedFixture(), {
+    isTTY: false,
+    color: false,
+    width: 200,
+    selectedWindow: "hour",
+    visibleCards: ["hour", "hour", "day", "week"],
+  });
+  assert.equal(plain.match(/│[▶·] LAST 60 MINUTES/g)?.length ?? 0, 2);
+});
+
 test("selecting a derived card shows its trend and breakdown scope", () => {
   const input = derivedFixture();
   const plain = renderDashboard(input, { isTTY: false, color: false, width: 120, selectedWindow: "15m", visibleCards: ["15m", "30m", "hour", "day"] });
@@ -985,12 +996,14 @@ test("normalizeTrend retains per-bucket splits through the cache path", () => {
   assert.equal(once.windows.hour.trends[0]?.providers?.[0]?.totals.input, 3);
 });
 
-test("normalizeVisibleCards enforces four or six distinct cards", () => {  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
+test("normalizeVisibleCards enforces four or six cards, duplicates allowed", () => {  assert.deepEqual(normalizeVisibleCards(undefined), ["hour", "day", "week", "month"]);
   assert.deepEqual(normalizeVisibleCards(null), ["hour", "day", "week", "month"]);
   assert.deepEqual(
     normalizeVisibleCards(["15m", "15m", "bogus", "day", "week", "month", "30m", "2h", "hour"]),
-    ["15m", "day", "week", "month", "30m", "2h"],
+    ["15m", "15m", "day", "week", "month", "30m"],
   );
+  // The same card twice renders twice.
+  assert.deepEqual(normalizeVisibleCards(["hour", "hour", "day", "week"]), ["hour", "hour", "day", "week"]);
   assert.deepEqual(normalizeVisibleCards(["2h"]), ["2h", "hour", "day", "week"]);
   assert.deepEqual(normalizeSettings({}).visibleCards, ["hour", "day", "week", "month"]);
   assert.deepEqual(normalizeSettings({ visibleCards: ["15m", "30m", "2h", "day"] }).visibleCards, ["15m", "30m", "2h", "day"]);

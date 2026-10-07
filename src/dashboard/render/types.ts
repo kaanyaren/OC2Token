@@ -111,23 +111,24 @@ export const VISIBLE_CARD_COUNTS = [4, 6] as const;
 export type VisibleCardCount = (typeof VISIBLE_CARD_COUNTS)[number];
 
 /**
- * Normalize a visible-cards list to exactly four or six distinct kinds. More
- * than four valid kinds selects six (extras dropped past six); anything else
- * selects four. Legacy or corrupt values fall back to the default layout;
- * gaps are filled from the cycle order (whose first four entries are the
- * legacy defaults).
+ * Normalize a visible-cards list to exactly four or six kinds. The same kind
+ * may appear twice (e.g. two hour cards side by side). An explicit count
+ * wins; otherwise more than four valid entries selects six (extras dropped
+ * past six) and anything else selects four. Legacy or corrupt values fall
+ * back to the default layout; gaps are filled with unused kinds from the
+ * cycle order (whose first four entries are the legacy defaults).
  */
 export function normalizeVisibleCards(value: unknown, count?: VisibleCardCount): DashboardCardKind[] {
-  const seen: DashboardCardKind[] = [];
+  const kept: DashboardCardKind[] = [];
   if (Array.isArray(value)) {
     for (const entry of value) {
-      if (isDashboardCardKind(entry) && !seen.includes(entry)) {
-        seen.push(entry);
+      if (isDashboardCardKind(entry)) {
+        kept.push(entry);
       }
     }
   }
-  const target: VisibleCardCount = count ?? (seen.length > 4 ? 6 : 4);
-  const trimmed = seen.slice(0, target);
+  const target: VisibleCardCount = count ?? (kept.length > 4 ? 6 : 4);
+  const trimmed = kept.slice(0, target);
   for (const kind of CARD_KIND_ORDER) {
     if (trimmed.length === target) break;
     if (!trimmed.includes(kind)) trimmed.push(kind);

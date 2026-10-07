@@ -506,23 +506,18 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     draw();
   };
 
-  /** Cycle a settings card slot to the next kind not used by another slot. */
+  /** Cycle a settings card slot to the next kind (duplicates allowed). */
   const cycleCardSlot = (slot: number): void => {
     const current = settingsState.visibleCards;
     if (slot < 0 || slot >= current.length) return;
     const start = CARD_KIND_ORDER.indexOf(current[slot]!);
-    for (let step = 1; step <= CARD_KIND_ORDER.length; step += 1) {
-      const next = CARD_KIND_ORDER[(start + step) % CARD_KIND_ORDER.length]!;
-      if (!current.includes(next)) {
-        const updated = [...current];
-        updated[slot] = next;
-        settingsState.visibleCards = updated;
-        if (!updated.includes(selectedCard)) selectedCard = next;
-        persistCurrentSettings();
-        draw();
-        return;
-      }
-    }
+    const next = CARD_KIND_ORDER[(start + 1) % CARD_KIND_ORDER.length]!;
+    const updated = [...current];
+    updated[slot] = next;
+    settingsState.visibleCards = updated;
+    if (!updated.includes(selectedCard)) selectedCard = next;
+    persistCurrentSettings();
+    draw();
   };
 
   /** Toggle the top cards between four and six visible slots. */
