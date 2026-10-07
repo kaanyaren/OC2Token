@@ -113,7 +113,7 @@ Options:
   --once                 Collect once and exit
   --json                 Emit stable JSON and exit
   --format <mode>        auto, dashboard, table, or json
-  --refresh <seconds>    Auto-refresh cadence; 0 is manual-only, or 60-14400 (1m-4h).
+  --refresh <seconds>    Auto-refresh cadence; 0 is manual-only, or 15-7200 (15s-2h).
                        With 0 the settings panel shows persisted value or 300s
                        default while auto-refresh stays off.
   --timezone <IANA>      Time zone for local day and ISO week boundaries
@@ -213,7 +213,7 @@ function parseArgs(args: readonly string[]): CliOptions | "help" | "version" {
   }
   if (format === "json") once = true;
   if (refreshExplicit && refreshIntervalSeconds !== 0 && (refreshIntervalSeconds < SETTINGS_MIN_REFRESH_SECONDS || refreshIntervalSeconds > SETTINGS_MAX_REFRESH_SECONDS)) {
-    failUsage(`--refresh must be 0 (manual) or between ${SETTINGS_MIN_REFRESH_SECONDS} and ${SETTINGS_MAX_REFRESH_SECONDS} seconds (1 minute to 4 hours)`);
+    failUsage(`--refresh must be 0 (manual) or between ${SETTINGS_MIN_REFRESH_SECONDS} and ${SETTINGS_MAX_REFRESH_SECONDS} seconds (15 seconds to 2 hours)`);
   }
   return { period, once, json, format, refreshIntervalSeconds, refreshExplicit, filterExplicit, timezone, project, cacheDirectory, color, command, filterProviders };
 }
@@ -359,7 +359,7 @@ async function runOnce(options: CliOptions, io: CliIO): Promise<number> {
 /**
  * Single clamp policy for refresh intervals. 0 is manual-only (scheduler
  * disabled, no auto timer) and is never clamped; every other value is
- * clamped to 60..14400 (1 minute to 4 hours). The settings panel cannot
+ * clamped to 15..7200 (15 seconds to 2 hours). The settings panel cannot
  * represent manual mode, so when the scheduler is 0 the panel shows the
  * persisted value or the 300s default while auto-refresh stays off.
  */
@@ -469,6 +469,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     showProvidersTable: boolean;
     showProjectsTable: boolean;
     visibleCards: DashboardCardKind[];
+    /** Opposite-size set remembered across count toggles. */
+    inactiveCards: DashboardCardKind[];
     focusedIndex: number;
   } = {
     visible: false,
@@ -477,6 +479,10 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     showProvidersTable: persisted?.showProvidersTable !== false,
     showProjectsTable: persisted?.showProjectsTable !== false,
     visibleCards: normalizeVisibleCards(persisted?.visibleCards),
+    inactiveCards: normalizeVisibleCards(
+      persisted?.inactiveCards,
+      normalizeVisibleCards(persisted?.visibleCards).length > 4 ? 4 : 6,
+    ),
     focusedIndex: 0,
   };
   // Active card. Ephemeral: collection always covers all four base windows,
@@ -494,6 +500,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       showProvidersTable: settingsState.showProvidersTable,
       showProjectsTable: settingsState.showProjectsTable,
       visibleCards: [...settingsState.visibleCards],
+      inactiveCards: [...settingsState.inactiveCards],
     }, options.cacheDirectory);
   };
 
@@ -506,10 +513,10 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     draw();
   };
 
-  /** Cycle a settings card slot to the next kind (duplicates allowed). */
+  /** Cycle a settings card slot (4-card mode only; the wide six are fixed). */
   const cycleCardSlot = (slot: number): void => {
     const current = settingsState.visibleCards;
-    if (slot < 0 || slot >= current.length) return;
+    if (slot < 0 || slot >= current.length || current.length > 4) return;
     const start = CARD_KIND_ORDER.indexOf(current[slot]!);
     const next = CARD_KIND_ORDER[(start + 1) % CARD_KIND_ORDER.length]!;
     const updated = [...current];
@@ -520,13 +527,18 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     draw();
   };
 
-  /** Toggle the top cards between four and six visible slots. */
+  /** Toggle the top cards between four and six, swapping the remembered sets. */
   const toggleCardCount = (): void => {
     const current = settingsState.visibleCards;
-    const updated = current.length > 4
-      ? normalizeVisibleCards(current.slice(0, 4))
-      : normalizeVisibleCards(current, 6);
-    settingsState.visibleCards = updated;
+    const other = settingsState.inactiveCards;
+    if (current.length > 4) {
+      settingsState.visibleCards = normalizeVisibleCards(other, 4);
+      settingsState.inactiveCards = normalizeVisibleCards(current, 6);
+    } else {
+      settingsState.visibleCards = normalizeVisibleCards(other, 6);
+      settingsState.inactiveCards = normalizeVisibleCards(current, 4);
+    }
+    const updated = settingsState.visibleCards;
     if (!updated.includes(selectedCard)) selectedCard = updated[0]!;
     persistCurrentSettings();
     draw();
@@ -597,6 +609,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         showProvidersTable: settingsState.showProvidersTable,
         showProjectsTable: settingsState.showProjectsTable,
         visibleCards: [...settingsState.visibleCards],
+        inactiveCards: [...settingsState.inactiveCards],
         focusedIndex: settingsState.focusedIndex,
       },
       visibleCards: [...settingsState.visibleCards],
@@ -727,8 +740,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           }
           return;
         }
-        const lo = line.indexOf("1m");
-        const hi = line.indexOf("4h");
+        const lo = line.indexOf("15s");
+        const hi = line.indexOf("2h");
         if (lo !== -1 && hi > lo) {
           const frac = Math.min(1, Math.max(0, (cx - 1 - lo) / (hi + 2 - lo)));
           const preset = REFRESH_PRESETS[Math.round(frac * (REFRESH_PRESETS.length - 1))]!;

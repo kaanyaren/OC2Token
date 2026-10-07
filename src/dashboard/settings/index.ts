@@ -6,12 +6,13 @@ import { defaultCacheDirectory } from "../../application.js";
 import { isProviderKind } from "../../domain/records.js";
 import {
   DEFAULT_VISIBLE_CARDS,
+  DEFAULT_WIDE_CARDS,
   normalizeVisibleCards,
   type DashboardCardKind,
 } from "../render/types.js";
 
-export const SETTINGS_MIN_REFRESH_SECONDS = 60;
-export const SETTINGS_MAX_REFRESH_SECONDS = 4 * 60 * 60; // 14400
+export const SETTINGS_MIN_REFRESH_SECONDS = 15;
+export const SETTINGS_MAX_REFRESH_SECONDS = 2 * 60 * 60; // 7200
 export const SETTINGS_DEFAULT_REFRESH_SECONDS = 300;
 export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
 
@@ -45,6 +46,8 @@ export interface DashboardSettings {
   readonly showProjectsTable?: boolean;
   /** Four or six visible top cards (default hour/day/week/month for legacy files). */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
+  /** Inactive card set of the opposite size (remembered across count toggles). */
+  readonly inactiveCards?: ReadonlyArray<DashboardCardKind>;
 }
 
 export function clampRefreshIntervalSeconds(value: number): number {
@@ -136,11 +139,19 @@ export function normalizeSettings(value: unknown): DashboardSettings {
       showProvidersTable: true,
       showProjectsTable: true,
       visibleCards: [...DEFAULT_VISIBLE_CARDS],
+      inactiveCards: [...DEFAULT_WIDE_CARDS],
     };
   }
   const record = value as Record<string, unknown>;
   const enabled = normalizeEnabledProviders(record.enabledProviders ?? record.providers ?? record.filterProviders);
   const interval = normalizeRefreshIntervalSeconds(record.refreshIntervalSeconds as unknown);
+  const active = normalizeVisibleCards(record.visibleCards);
+  // The inactive set is always the opposite size. Files predating it fall
+  // back to defaults: the wide preset when four show, legacy four when six
+  // show (e.g. a 0.1.23 six-list keeps its layout, 4 defaults below it).
+  const inactive = record.inactiveCards !== undefined
+    ? normalizeVisibleCards(record.inactiveCards, active.length > 4 ? 4 : 6)
+    : normalizeVisibleCards(active.length > 4 ? DEFAULT_VISIBLE_CARDS : DEFAULT_WIDE_CARDS, active.length > 4 ? 4 : 6);
   return {
     enabledProviders: enabled,
     refreshIntervalSeconds: interval,
@@ -148,7 +159,8 @@ export function normalizeSettings(value: unknown): DashboardSettings {
     showProvidersTable: record.showProvidersTable !== false,
     showProjectsTable: record.showProjectsTable !== false,
     // Missing (legacy settings.json) means the legacy hour/day/week/month layout.
-    visibleCards: normalizeVisibleCards(record.visibleCards),
+    visibleCards: active,
+    inactiveCards: inactive,
   };
 }
 
@@ -195,6 +207,7 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
     process.stderr.write(`oc2token: warning: failed to create settings directory at ${directory}: ${error instanceof Error ? error.message : String(error)}\n`);
     return;
   }
+  const active = normalizeVisibleCards(settings.visibleCards);
   const payload = JSON.stringify(
     {
       version: 1,
@@ -202,7 +215,8 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settings.refreshIntervalSeconds),
       showProvidersTable: settings.showProvidersTable !== false,
       showProjectsTable: settings.showProjectsTable !== false,
-      visibleCards: normalizeVisibleCards(settings.visibleCards),
+      visibleCards: active,
+      inactiveCards: normalizeVisibleCards(settings.inactiveCards, active.length > 4 ? 4 : 6),
     },
     null,
     2,
@@ -214,7 +228,7 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
   }
 }
 
-export const REFRESH_INTERVAL_PRESETS: readonly number[] = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400] as const;
+export const REFRESH_INTERVAL_PRESETS: readonly number[] = [15, 30, 60, 120, 300, 600, 900, 3600, 7200] as const;
 
 export function nearestPresetIndex(value: number): number {
   const clamped = clampRefreshIntervalSeconds(value);

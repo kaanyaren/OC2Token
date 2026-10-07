@@ -1030,6 +1030,12 @@ test("normalizeVisibleCards enforces four or six cards, duplicates allowed", () 
     normalizeSettings({ visibleCards: ["hour", "day", "week", "month", "2h", "5h"] }).visibleCards,
     ["hour", "day", "week", "month", "2h", "5h"],
   );
+  // The inactive set round-trips so each layout survives a count toggle.
+  assert.deepEqual(
+    normalizeSettings({ visibleCards: ["hour", "day"], inactiveCards: ["30m", "hour", "2h", "5h", "day", "month"] }).inactiveCards,
+    ["30m", "hour", "2h", "5h", "day", "month"],
+  );
+  assert.deepEqual(normalizeSettings({}).inactiveCards, ["30m", "hour", "2h", "5h", "day", "month"]);
 });
 
 test("settings panel lists the four card slots", () => {
@@ -1048,8 +1054,8 @@ test("settings panel lists the four card slots", () => {
   });
   assert.match(plain, /Card 1: 15m/);
   assert.match(plain, /Card 4: Week/);
-  // Inactive slots still render (dimmed) so focus indices never shift.
-  assert.match(plain, /Card 6: 30m/);
+  // Inactive slots preview the remembered wide set, dimmed.
+  assert.match(plain, /Card 6: Month/);
   assert.match(plain, /Cards shown: 4/);
 });
 
@@ -1090,8 +1096,8 @@ test("settings focus index order follows the rendered row order", () => {
     "Card 2: Hour",
     "Card 3: Today",
     "Card 4: Week",
-    "Card 5: Month",
-    "Card 6: 30m",
+    "Card 5: Today",
+    "Card 6: Month",
     "Cards shown: 4",
     "Refresh interval · 5m",
   ]);

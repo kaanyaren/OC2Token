@@ -95,6 +95,16 @@ export const DEFAULT_VISIBLE_CARDS: readonly DashboardCardKind[] = [
   "month",
 ];
 
+/** Fixed 6-card layout: duration-ascending from 30m to Month. */
+export const DEFAULT_WIDE_CARDS: readonly DashboardCardKind[] = [
+  "30m",
+  "hour",
+  "2h",
+  "5h",
+  "day",
+  "month",
+];
+
 export function isDashboardCardKind(value: unknown): value is DashboardCardKind {
   return typeof value === "string" &&
     ((USAGE_WINDOW_KINDS as readonly string[]).includes(value) ||
@@ -168,6 +178,12 @@ export interface DashboardSettingsView {
   readonly showProjectsTable?: boolean;
   /** Four or six visible top cards. Undefined (legacy) means hour/day/week/month. */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
+  /**
+   * The inactive card set: the remembered six when four show, the remembered
+   * four when six show. Toggling the count swaps the two, so each layout
+   * survives a round trip. Undefined means defaults.
+   */
+  readonly inactiveCards?: ReadonlyArray<DashboardCardKind>;
 }
 
 export interface DashboardProjectsView {

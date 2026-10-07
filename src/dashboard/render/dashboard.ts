@@ -36,6 +36,7 @@ import {
 } from "./format.js";
 import {
   DEFAULT_VISIBLE_CARDS,
+  DEFAULT_WIDE_CARDS,
   isDerivedCardKind,
   normalizeDashboardSnapshot,
   normalizeVisibleCards,
@@ -590,7 +591,7 @@ function renderBreakdown(
 }
 
 function formatRefreshInterval(seconds: number): string {
-  const clamped = Math.max(60, Math.min(14400, Math.floor(seconds)));
+  const clamped = Math.max(15, Math.min(7200, Math.floor(seconds)));
   if (clamped % 3600 === 0) {
     const h = clamped / 3600;
     return `${h}h`;
@@ -611,7 +612,7 @@ function formatRefreshInterval(seconds: number): string {
 }
 
 /** Refresh interval presets (seconds). Shared by the settings panel and mouse clicks. */
-export const REFRESH_PRESETS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400] as const;
+export const REFRESH_PRESETS = [15, 30, 60, 120, 300, 600, 900, 3600, 7200] as const;
 
 function renderSettingsPanel(
   settings: NonNullable<DashboardRenderOptions["settings"]>,
@@ -619,7 +620,7 @@ function renderSettingsPanel(
   color: boolean,
 ): string[] {
   function presetIndex(value: number): number {
-    const clamped = Math.max(60, Math.min(14400, Math.floor(value)));
+    const clamped = Math.max(15, Math.min(7200, Math.floor(value)));
     let best = 0;
     let bestDiff = Infinity;
     for (let i = 0; i < REFRESH_PRESETS.length; i += 1) {
@@ -710,15 +711,18 @@ function renderSettingsPanel(
   lines.push(padPrefix + `│${pad(themePurple(cardsHeading, color, true), inner)}│`);
 
   const visible = normalizeVisibleCards(settings.visibleCards);
-  // All six slot rows always render so focus indices never shift; slots at
-  // or past the visible count show the kind they would take, dimmed.
-  const fullSix = normalizeVisibleCards(settings.visibleCards, 6);
+  // All six slot rows always render so focus indices never shift. The wide
+  // layout is fixed (30m first, Month last) and its slots do not cycle; in
+  // 4-card mode the extra slots preview the remembered wide set, dimmed.
+  const sixMode = visible.length > 4;
+  const wide = sixMode ? visible : normalizeVisibleCards(settings.inactiveCards ?? DEFAULT_WIDE_CARDS, 6);
   for (let slot = 0; slot < 6; slot += 1) {
-    const kind = fullSix[slot]!;
-    const active = slot < visible.length;
+    const kind = !sixMode && slot < visible.length ? visible[slot]! : wide[slot]!;
+    const active = sixMode || slot < visible.length;
+    const cyclable = active && !sixMode;
     const focused = settings.focusedIndex === SETTINGS_ROWS.cards + slot;
     const prefix = focused ? themeOrange("▶ ", color, true) : "  ";
-    const suffix = focused && active ? "  ← cycle" : "";
+    const suffix = focused && cyclable ? "  ← cycle" : "";
     const suffixLen = suffix.length > 0 ? 10 : 0; // "  ← cycle" visible length
     const nameAvail = Math.max(4, inner - 4 - suffixLen);
     const label = `Card ${slot + 1}: ${shortCardLabel(kind)}`;
@@ -756,8 +760,8 @@ function renderSettingsPanel(
   lines.push(padPrefix + `│${pad(headingWithValue, inner)}│`);
 
   // Slider track
-  const leftLabel = "1m";
-  const rightLabel = "4h";
+  const leftLabel = "15s";
+  const rightLabel = "2h";
   const trackAvail = Math.max(8, inner - leftLabel.length - rightLabel.length - 6);
   const trackLen = Math.max(8, Math.min(26, trackAvail));
   const handlePos = Math.round(pct * (trackLen - 1));
@@ -804,7 +808,7 @@ function renderSettingsPanel(
       lines.push(padPrefix + `│${pad(`${" ".repeat(padVal)}${valLine}`, inner)}│`);
     }
   } else {
-    const compact = intervalFocused ? "← → to adjust" : "← 1m  ·  4h →";
+    const compact = intervalFocused ? "← → to adjust" : "← 15s  ·  2h →";
     const hint = intervalFocused ? themeOrange(compact, color, true) : themePurple(compact, color);
     const hintPad = Math.max(0, Math.floor((inner - stripAnsi(compact).length) / 2));
     lines.push(padPrefix + `│${pad(`${" ".repeat(hintPad)}${hint}`, inner)}│`);
