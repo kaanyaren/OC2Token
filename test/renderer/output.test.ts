@@ -121,12 +121,38 @@ test("interactive header keeps the top bar focused on the app identity", () => {
   assert.match(output, /Status: COMPLETE/);
 });
 
-test("narrow dashboard uses one column and contains the navigation footer", () => {
+// Card top borders form the first consecutive block of border lines at the
+// padding column; later boxed panels (e.g. settings) may render there too.
+const cardRowLines = (output: string): string[] => {
+  const all = output.split("\n");
+  const isFirstBorder = (line: string): boolean => line.trimStart().startsWith("╭") && line.indexOf("╭") === 2;
+  const start = all.findIndex(isFirstBorder);
+  if (start === -1) return [];
+  const block: string[] = [];
+  for (let i = start; i < all.length; i++) {
+    const line = all[i];
+    const isCardPart = isFirstBorder(line) || /^\s{2}[│╰]/.test(line);
+    if (!isCardPart) break;
+    if (isFirstBorder(line)) block.push(line);
+  }
+  return block;
+};
+
+test("cards shrink to compact width before dropping columns at medium width", () => {
+  // At width 60 cards would fit two per row at compact size — they must not
+  // stack into a single column prematurely.
   const output = renderDashboard(fixture(), { isTTY: true, color: false, width: 60, now: NOW });
-  const cardRows = output.split("\n").filter((line) => line.trimStart().startsWith("╭") && line.indexOf("╭") === 2);
+  const cardRows = cardRowLines(output);
+  assert.equal(cardRows.length, 2);
+  assert.ok(cardRows.every((line) => line.includes("╮  ╭")));
+});
+
+test("very narrow dashboard uses one column and contains the navigation footer", () => {
+  const output = renderDashboard(fixture(), { isTTY: true, color: false, width: 30, now: NOW });
+  const cardRows = cardRowLines(output);
   assert.equal(cardRows.length, 4);
   assert.ok(cardRows.every((line) => !line.includes("╮  ╭")));
-  assert.match(output, /r Refresh/);
+  assert.match(output, /r 1\/2\/3\/4 p s q \?/);
   assert.doesNotMatch(output, /\u001b\[/);
 });
 

@@ -51,8 +51,6 @@ import {
 import { ALL_PROVIDER_KINDS, SETTINGS_ROWS } from "../settings/index.js";
 import { resolveAppVersion } from "../../version.js";
 
-const CARD_MIN_WIDTH = 27;
-const WIDE_LAYOUT_MIN_WIDTH = 90;
 export const APP_PADDING = 2;
 export const GITHUB_URL = "https://github.com/kaanyaren/OC2Token";
 // ANSI/OSC sequences are intentionally matched here so outer padding can
@@ -261,27 +259,39 @@ function composeCards(cards: string[][], gap = 2): string[] {
 const HEADER_LINES = 2;
 const CARD_LINES = 6;
 const CARD_GAP = 2;
-const FOUR_CARD_LAYOUT_MIN_WIDTH = CARD_MIN_WIDTH * 4 + CARD_GAP * 3;
+/** Comfortable card width; layouts keep cards at/above this while possible. */
+const CARD_MIN_WIDTH = 27;
+/**
+ * Cards shrink to this before columns are dropped. Content in cardLines
+ * adapts with short labels below inner width 15, so a card this narrow is
+ * still readable.
+ */
+const CARD_COMPACT_MIN_WIDTH = 14;
 
 /**
  * Top-card grid shared by the renderer and the mouse hit regions so clicks
- * never drift from what is drawn. Four cards share one row when wide; six
- * cards use two rows of three when wide, three rows of two on medium
- * terminals, and stack when narrow.
+ * never drift from what is drawn. Columns are kept while cards can shrink:
+ * first cards narrow down to CARD_COMPACT_MIN_WIDTH, only then a column is
+ * dropped. Four cards go 4 → 2 → 1 columns; six cards go 3 → 2 → 1. Content
+ * reflows inside the card (short labels, compact numbers) so narrow cards
+ * stay readable.
  */
-function cardGridColumns(contentWidth: number, count: number): { columns: number; cardWidth: number } {
-  if (contentWidth >= FOUR_CARD_LAYOUT_MIN_WIDTH) {
-    const columns = count > 4 ? 3 : 4;
-    return {
-      columns,
-      cardWidth: Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP * (columns - 1)) / columns)),
-    };
+function fitColumns(contentWidth: number, columns: number, minWidth: number): { columns: number; cardWidth: number } | null {
+  if (contentWidth >= columns * minWidth + CARD_GAP * (columns - 1)) {
+    return { columns, cardWidth: Math.floor((contentWidth - CARD_GAP * (columns - 1)) / columns) };
   }
-  if (contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
-    return {
-      columns: 2,
-      cardWidth: Math.max(CARD_MIN_WIDTH, Math.floor((contentWidth - CARD_GAP) / 2)),
-    };
+  return null;
+}
+
+function cardGridColumns(contentWidth: number, count: number): { columns: number; cardWidth: number } {
+  const maxColumns = count > 4 ? 3 : 4;
+  // Only even row candidates: 4 (or 3) columns of full rows, then pairs.
+  const candidates = maxColumns === 4 ? [4, 2] : [3, 2];
+  for (const minWidth of [CARD_MIN_WIDTH, CARD_COMPACT_MIN_WIDTH]) {
+    for (const columns of candidates) {
+      const fit = fitColumns(contentWidth, columns, minWidth);
+      if (fit) return fit;
+    }
   }
   return { columns: 1, cardWidth: Math.max(12, Math.min(CARD_MIN_WIDTH, contentWidth - 2)) };
 }
@@ -301,8 +311,8 @@ export function getCardHitRegions(
   const clamped = Math.max(20, width);
   const contentWidth = Math.max(1, clamped - APP_PADDING * 2);
   const headerHeight = HEADER_LINES;
-  if (contentWidth >= FOUR_CARD_LAYOUT_MIN_WIDTH || contentWidth >= WIDE_LAYOUT_MIN_WIDTH) {
-    const { columns, cardWidth } = cardGridColumns(contentWidth, kinds.length);
+  const { columns, cardWidth } = cardGridColumns(contentWidth, kinds.length);
+  if (columns > 1) {
     const yGap = 0; // stacked rows touch — no blank separator (see renderDashboard)
     return kinds.map((kind, idx) => {
       const column = idx % columns;
@@ -312,13 +322,13 @@ export function getCardHitRegions(
       return { kind, x1, y1, x2: x1 + cardWidth - 1, y2: y1 + CARD_LINES - 1 };
     });
   }
-  const cardWidth = Math.max(12, Math.min(CARD_MIN_WIDTH, contentWidth - 2));
+  const stackedCardWidth = Math.max(12, Math.min(CARD_MIN_WIDTH, contentWidth - 2));
   const yGap = 0; // stacked cards touch — no blank separator (see renderDashboard)
   return kinds.map((kind, idx) => {
     const y1 = headerHeight + 1 + idx * (CARD_LINES + yGap);
     const y2 = y1 + CARD_LINES - 1;
     const x1 = APP_PADDING + 1;
-    const x2 = x1 + cardWidth - 1;
+    const x2 = x1 + stackedCardWidth - 1;
     return { kind, x1, y1, x2, y2 };
   });
 }
@@ -1144,7 +1154,7 @@ export function renderDashboard(
     selected === kind,
   ));
 
-  if (width >= FOUR_CARD_LAYOUT_MIN_WIDTH || width >= WIDE_LAYOUT_MIN_WIDTH) {
+  if (grid.columns > 1) {
     for (let index = 0; index < cards.length; index += grid.columns) {
       lines.push(...composeCards(cards.slice(index, index + grid.columns)));
     }
