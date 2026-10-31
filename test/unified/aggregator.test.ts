@@ -62,7 +62,7 @@ function emptyProviderResult(source: "codex" | "antigravity" | "message-scan"): 
     coverage: { complete: true, sessionsDiscovered: 0, sessionsScanned: 0, sessionsSkipped: 0, pagesRead: 0, jobsRetried: 0, provisionalMessages: 0, errors: [] },
   };
 }
-function fixtureResult(provider: "opencode" | "codex" | "antigravity", input: number): CollectionResult {
+function fixtureResult(provider: "opencode" | "codex" | "antigravity" | "pi" | "deepseek", input: number): CollectionResult {
   const wins = windows();
   const rec = createUsageRecord({
     sessionID: `${provider}-session`,
@@ -89,16 +89,25 @@ test("UnifiedUsageSource sums all providers into unified totals and provider bre
   const opencode = fixtureResult("opencode", 100);
   const codex = fixtureResult("codex", 50);
   const antigravity = fixtureResult("antigravity", 30);
-  const unified = new UnifiedUsageSource(sourceReturning(opencode), sourceReturning(codex), sourceReturning(antigravity));
+  const pi = fixtureResult("pi", 20);
+  const deepseek = fixtureResult("deepseek", 10);
+  const unified = new UnifiedUsageSource(
+    sourceReturning(opencode),
+    sourceReturning(codex),
+    sourceReturning(antigravity),
+    sourceReturning(pi),
+    sourceReturning(deepseek),
+    {},
+  );
   const result = await unified.collect(request());
   assert.equal(result.source, "unified");
-  assert.equal(result.records.length, 3);
-  assert.equal(result.totalsByWindow.day?.input, 180);
-  assert.equal(result.totalsByWindow.day?.recorded_total, 183);
-  // providersByWindow per window should contain 3 breakdowns
-  assert.equal(result.providersByWindow?.day?.length, 3);
+  assert.equal(result.records.length, 5);
+  assert.equal(result.totalsByWindow.day?.input, 210);
+  assert.equal(result.totalsByWindow.day?.recorded_total, 215);
+  // providersByWindow per window should contain 5 breakdowns
+  assert.equal(result.providersByWindow?.day?.length, 5);
   const providerNames = result.providersByWindow?.day?.map((p) => p.name).sort();
-  assert.deepEqual(providerNames, ["antigravity", "codex", "opencode"].sort());
+  assert.deepEqual(providerNames, ["antigravity", "codex", "deepseek", "opencode", "pi"].sort());
 });
 
 test("UnifiedUsageSource renders model-derived costs for provider and project tables", async () => {

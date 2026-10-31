@@ -714,6 +714,20 @@ test("footer token lookup resolves the word under a 1-based column", () => {
   assert.equal(footerTokenAtX(line, 99), undefined);
 });
 
+test("provider settings migrate the legacy all-provider set and keep explicit subsets", () => {
+  // Existing settings predate Pi and DeepSeek; the old full set was "all".
+  assert.deepEqual(
+    normalizeSettings({ enabledProviders: ["opencode", "codex", "antigravity"] }).enabledProviders,
+    ["opencode", "codex", "antigravity", "pi", "deepseek"],
+  );
+  // An explicit subset stays a subset.
+  assert.deepEqual(normalizeSettings({ enabledProviders: ["opencode"] }).enabledProviders, ["opencode"]);
+  assert.deepEqual(
+    normalizeSettings({ enabledProviders: ["opencode", "pi"] }).enabledProviders,
+    ["opencode", "pi"],
+  );
+});
+
 test("breakdown tables toggle from settings and default to shown", () => {
   // Legacy settings files without the flags show both tables.
   assert.equal(normalizeSettings({}).showProvidersTable, true);
@@ -1060,7 +1074,7 @@ test("settings panel lists the four card slots", () => {
 });
 
 test("settings focus index order follows the rendered row order", () => {
-  // Tab/arrows walk focusedIndex 0..12 linearly, so the index order must match
+  // Tab/arrows walk focusedIndex 0..count-1 linearly, so the index order must match
   // the order the panel draws its rows or navigation appears to skip rows.
   const focusedRow = (focusedIndex: number): string => {
     const plain = renderDashboard(fixture(), {
@@ -1090,6 +1104,8 @@ test("settings focus index order follows the rendered row order", () => {
     "◉ opencode",
     "○ codex",
     "○ antigravity",
+    "○ pi",
+    "○ deepseek",
     "◉ Providers table",
     "◉ Projects table",
     "Card 1: 15m",

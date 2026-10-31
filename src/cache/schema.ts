@@ -106,8 +106,8 @@ function recordFromUnknown(value: unknown, index: number): PersistedRecord {
     fail(`records[${index}].completeness must be final or provisional`);
   }
   const rawProvider = value.provider ?? "opencode";
-  if (rawProvider !== "opencode" && rawProvider !== "codex" && rawProvider !== "antigravity") {
-    fail(`records[${index}].provider must be one of opencode, codex, antigravity`);
+  if (rawProvider !== "opencode" && rawProvider !== "codex" && rawProvider !== "antigravity" && rawProvider !== "pi" && rawProvider !== "deepseek") {
+    fail(`records[${index}].provider must be one of opencode, codex, antigravity, pi, deepseek`);
   }
   const provider = rawProvider as ProviderKind;
 
@@ -347,7 +347,7 @@ export function migrateManifestDocument(value: unknown): MigratedDocument<Manife
     const fingerprints: Record<string, string> = {};
     for (const [key, entry] of Object.entries(value.providerFingerprints)) {
       if (
-        (key === "opencode" || key === "codex" || key === "antigravity") &&
+        (key === "opencode" || key === "codex" || key === "antigravity" || key === "pi" || key === "deepseek") &&
         typeof entry === "string" &&
         entry.length > 0 &&
         entry.length <= 512 &&

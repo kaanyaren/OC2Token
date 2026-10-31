@@ -34,6 +34,8 @@ import { collectUsageParallel, type CollectorOptions } from "./collector/index.j
 import { UsageRecordReducer } from "./accounting/reducer.js";
 import { collectCodex } from "./codex/index.js";
 import { collectAntigravity } from "./antigravity/index.js";
+import { collectPi } from "./pi/index.js";
+import { collectDeepSeek } from "./deepseek/index.js";
 import {
   createNormalizedCacheStore,
   type NormalizedCacheStore,
@@ -492,22 +494,68 @@ export class AntigravityFileSource implements UsageSource {
   }
 }
 
+export class PiFileSource implements UsageSource {
+  constructor(private readonly directory?: string) {}
+
+  async collect(request: CollectionRequest): Promise<CollectionResult> {
+    if (request.signal?.aborted) throw cancellationError();
+    return collectPi(request, this.directory);
+  }
+}
+
+export class DeepSeekFileSource implements UsageSource {
+  constructor(private readonly directory?: string) {}
+
+  async collect(request: CollectionRequest): Promise<CollectionResult> {
+    if (request.signal?.aborted) throw cancellationError();
+    return collectDeepSeek(request, this.directory);
+  }
+}
+
 export interface UnifiedUsageSourceOptions {
   readonly filterProviders?: Set<ProviderKind>;
 }
 
 export class UnifiedUsageSource implements UsageSource {
   private filterProviders: Set<ProviderKind> | undefined;
+  private readonly piSource: UsageSource | undefined;
+  private readonly deepseekSource: UsageSource | undefined;
 
   constructor(
     readonly opencode: UsageSource,
     readonly codex: UsageSource,
     readonly antigravity: UsageSource,
-    options: UnifiedUsageSourceOptions = {},
+    piOrOptions?: UsageSource | UnifiedUsageSourceOptions,
+    deepseekOrOptions?: UsageSource | UnifiedUsageSourceOptions,
+    maybeOptions: UnifiedUsageSourceOptions = {},
   ) {
-    this.filterProviders = options.filterProviders === undefined || options.filterProviders.size === 0
-      ? undefined
-      : new Set(options.filterProviders);
+    const isSource = (value: unknown): value is UsageSource =>
+      typeof value === "object" &&
+      value !== null &&
+      typeof (value as { collect?: unknown }).collect === "function";
+
+    let pi: UsageSource | undefined;
+    let deepseek: UsageSource | undefined;
+    let options: UnifiedUsageSourceOptions;
+    if (isSource(piOrOptions)) {
+      pi = piOrOptions;
+      if (isSource(deepseekOrOptions)) {
+        deepseek = deepseekOrOptions;
+        options = maybeOptions;
+      } else {
+        options = deepseekOrOptions ?? {};
+      }
+    } else {
+      options =
+        piOrOptions ??
+        (deepseekOrOptions !== undefined && !isSource(deepseekOrOptions) ? deepseekOrOptions : {});
+    }
+    this.piSource = pi;
+    this.deepseekSource = deepseek;
+    this.filterProviders =
+      options.filterProviders === undefined || options.filterProviders.size === 0
+        ? undefined
+        : new Set(options.filterProviders);
   }
 
   getFilterProviders(): Set<ProviderKind> | undefined {
@@ -541,6 +589,12 @@ export class UnifiedUsageSource implements UsageSource {
     if (shouldCollect("opencode")) tasks.push({ provider: "opencode", source: this.opencode });
     if (shouldCollect("codex")) tasks.push({ provider: "codex", source: this.codex });
     if (shouldCollect("antigravity")) tasks.push({ provider: "antigravity", source: this.antigravity });
+    if (shouldCollect("pi") && this.piSource !== undefined) {
+      tasks.push({ provider: "pi", source: this.piSource });
+    }
+    if (shouldCollect("deepseek") && this.deepseekSource !== undefined) {
+      tasks.push({ provider: "deepseek", source: this.deepseekSource });
+    }
 
     if (tasks.length === 0) {
       const emptyRecords: ReadonlyArray<UsageRecord> = [];
@@ -668,8 +722,8 @@ export class UnifiedUsageSource implements UsageSource {
     const projectsMutable: Record<string, ReadonlyArray<UsageBreakdown>> = {};
 
     for (const w of request.windows) {
-      // Recomputed splits cover record-based sources (codex/antigravity/
-      // message-scan). Supplied splits from those same sources describe the
+      // Recomputed splits cover record-based sources (codex/antigravity/pi/
+      // deepseek/message-scan). Supplied splits from those same sources describe the
       // SAME records, so merging both would double-count. Stats-only sources
       // (opencode stats, no records) have no recomputed coverage, so their
       // supplied splits must be preserved. Partition by records presence.
@@ -713,6 +767,8 @@ export class UnifiedUsageSource implements UsageSource {
       const sole = [...presentProviders][0]!;
       if (sole === "codex") source = "codex";
       else if (sole === "antigravity") source = "antigravity";
+      else if (sole === "pi") source = "pi";
+      else if (sole === "deepseek") source = "deepseek";
       else {
         const opencodeResult = successful.find((s) => s.provider === "opencode");
         source = opencodeResult?.result.source ?? "message-scan";
@@ -730,6 +786,8 @@ export class UnifiedUsageSource implements UsageSource {
         const soleTask = tasks[0]!;
         if (soleTask.provider === "codex") source = "codex";
         else if (soleTask.provider === "antigravity") source = "antigravity";
+        else if (soleTask.provider === "pi") source = "pi";
+        else if (soleTask.provider === "deepseek") source = "deepseek";
         else {
           const opencodeResult = successful.find((s) => s.provider === "opencode");
           source = opencodeResult?.result.source ?? "message-scan";
@@ -938,6 +996,8 @@ export interface ApplicationOptions extends OpenCodeAdapterOptions {
   readonly collectorOptions?: CollectorOptions;
   readonly codexDirectory?: string;
   readonly antigravityDirectory?: string;
+  readonly piSessionsDirectory?: string;
+  readonly deepseekSessionsDirectory?: string;
   readonly filterProviders?: Set<ProviderKind>;
 }
 
@@ -951,9 +1011,18 @@ export function createApplicationSource(options: ApplicationOptions = {}): {
   const hybrid = new HybridUsageSource(adapter, options.collectorOptions);
   const codexSource = new CodexFileSource(options.codexDirectory);
   const antigravitySource = new AntigravityFileSource(options.antigravityDirectory);
+  const piSource = new PiFileSource(options.piSessionsDirectory);
+  const deepseekSource = new DeepSeekFileSource(options.deepseekSessionsDirectory);
   const unifiedOptions =
     options.filterProviders === undefined ? undefined : { filterProviders: options.filterProviders };
-  const unified = new UnifiedUsageSource(hybrid, codexSource, antigravitySource, unifiedOptions);
+  const unified = new UnifiedUsageSource(
+    hybrid,
+    codexSource,
+    antigravitySource,
+    piSource,
+    deepseekSource,
+    unifiedOptions ?? {},
+  );
   const store = createNormalizedCacheStore({ directory: options.cacheDirectory ?? defaultCacheDirectory() });
   return { adapter, unified, source: new CachedUsageSource(unified, store), store };
 }

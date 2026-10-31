@@ -111,7 +111,7 @@ export function renderTable(input: DashboardSnapshotInput): string {
     ...sortedProjects,
   ]);
   const lines = [
-    "OpenCode 2 Token Usage",
+    "Coding Agent Token Usage",
     `Source: ${safeIdentifier(displaySource)}  Version: ${safeIdentifier(snapshot.version)}`,
     `Status: ${status}  Coverage: ${formatCoverage(snapshot.coverage, snapshot.stale)}`,
     "",

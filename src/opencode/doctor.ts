@@ -18,7 +18,9 @@ export type DoctorCheckName =
   | "stats-range"
   | "opencode"
   | "codex"
-  | "antigravity";
+  | "antigravity"
+  | "pi"
+  | "deepseek";
 
 export interface DoctorCheck {
   readonly name: DoctorCheckName;

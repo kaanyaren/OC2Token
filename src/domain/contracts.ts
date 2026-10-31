@@ -3,9 +3,16 @@ import type { TokenComponentsInput, UsageTotals } from "./tokens.js";
 import type { UsageRecord, UsageRecordCompleteness } from "./records.js";
 import type { UsageBucket, UsageWindow, UsageWindowKind } from "./windows.js";
 
-export type CollectionSource = "stats" | "message-scan" | "codex" | "antigravity" | "unified";
+export type CollectionSource =
+  | "stats"
+  | "message-scan"
+  | "codex"
+  | "antigravity"
+  | "pi"
+  | "deepseek"
+  | "unified";
 
-export type ProviderKind = "opencode" | "codex" | "antigravity";
+export type ProviderKind = "opencode" | "codex" | "antigravity" | "pi" | "deepseek";
 
 /**
  * Coverage describes what a collection actually observed. `complete` means

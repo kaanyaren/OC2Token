@@ -10,8 +10,10 @@ import {
   type AnsiOptions,
   themeCache,
   themeCacheUnderline,
+  themeBlue,
   themeCost,
   themeCyan,
+  themeGreen,
   themeIn,
   themeInUnderline,
   themeOrange,
@@ -186,6 +188,8 @@ function providerAccent(name: string, color: boolean, bright = false): (value: s
   const key = String(name).toLowerCase();
   if (key === "codex") return (value: string) => themeOrange(value, color, bright);
   if (key === "antigravity") return (value: string) => themeCyan(value, color, bright);
+  if (key === "pi") return (value: string) => themeGreen(value, color, bright);
+  if (key === "deepseek") return (value: string) => themeBlue(value, color, bright);
   return (value: string) => themePurple(value, color, bright);
 }
 

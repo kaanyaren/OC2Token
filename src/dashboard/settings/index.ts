@@ -14,12 +14,26 @@ import {
 export const SETTINGS_MIN_REFRESH_SECONDS = 15;
 export const SETTINGS_MAX_REFRESH_SECONDS = 2 * 60 * 60; // 7200
 export const SETTINGS_DEFAULT_REFRESH_SECONDS = 300;
-export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
+export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = [
+  "opencode",
+  "codex",
+  "antigravity",
+  "pi",
+  "deepseek",
+] as const;
+
+/**
+ * The provider set before Pi and DeepSeek Harness support. A persisted
+ * `enabledProviders` containing exactly this set was the old "all" default, so
+ * it migrates to the new full set instead of silently disabling the new
+ * providers after an upgrade.
+ */
+const LEGACY_ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex", "antigravity"] as const;
 
 /**
  * Settings focus rows, numbered in the order the panel *renders* them:
- * providers (0-2) -> tables (3-4) -> card slots (5-10) -> card count (11)
- * -> refresh interval (12).
+ * providers (0-4) -> tables (5-6) -> card slots (7-12) -> card count (13)
+ * -> refresh interval (14).
  *
  * All six slot rows always render; slots at or past the visible count are
  * dimmed placeholders so the indices below never shift when toggling
@@ -30,11 +44,11 @@ export const ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
  */
 export const SETTINGS_ROWS = {
   providers: 0,
-  tables: 3,
-  cards: 5,
-  cardCount: 11,
-  refresh: 12,
-  count: 13,
+  tables: 5,
+  cards: 7,
+  cardCount: 13,
+  refresh: 14,
+  count: 15,
 } as const;
 
 export interface DashboardSettings {
@@ -111,6 +125,10 @@ export function filterProvidersToEnabled(filterProviders?: Set<ProviderKind>): R
 export function normalizeEnabledProviders(value: unknown): ReadonlyArray<ProviderKind> {
   if (!Array.isArray(value)) return [...ALL_PROVIDER_KINDS];
   const filtered = value.filter(isProviderKind);
+  const legacyAll =
+    filtered.length === LEGACY_ALL_PROVIDER_KINDS.length &&
+    LEGACY_ALL_PROVIDER_KINDS.every((kind) => filtered.includes(kind));
+  if (legacyAll) return [...ALL_PROVIDER_KINDS];
   // Dedupe preserve order
   const seen = new Set<ProviderKind>();
   const ordered: ProviderKind[] = [];

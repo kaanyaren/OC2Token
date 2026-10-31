@@ -39,6 +39,8 @@ import {
 import { runOpenCodeDoctor } from "./opencode/index.js";
 import { runCodexDoctor } from "./codex/doctor.js";
 import { runAntigravityDoctor } from "./antigravity/doctor.js";
+import { runPiDoctor } from "./pi/doctor.js";
+import { runDeepSeekDoctor } from "./deepseek/doctor.js";
 import {
   ALL_PROVIDER_KINDS,
   SETTINGS_DEFAULT_REFRESH_SECONDS,
@@ -119,7 +121,7 @@ Options:
   --timezone <IANA>      Time zone for local day and ISO week boundaries
   --project <id>         Restrict collection to an OpenCode project
   --cache-dir <path>     Override the normalized metadata cache directory
-  --source <provider>    Filter providers: opencode, codex, antigravity, or all (repeatable)
+  --source <provider>    Filter providers: opencode, codex, antigravity, pi, deepseek, or all (repeatable)
   --no-color             Disable ANSI colors
   -h, --help             Show this help
   -v, --version          Show the version
@@ -172,7 +174,7 @@ function parseArgs(args: readonly string[]): CliOptions | "help" | "version" {
         continue;
       }
       if (!isProviderKind(value)) {
-        failUsage(`Unknown source: ${value} (expected opencode, codex, antigravity, or all)`);
+        failUsage(`Unknown source: ${value} (expected opencode, codex, antigravity, pi, deepseek, or all)`);
       }
       filterProviders.add(value as ProviderKind);
       continue;
@@ -279,6 +281,23 @@ async function runDoctor(options: CliOptions, io: CliIO): Promise<number> {
   let version: string | undefined;
   let fingerprint: string | undefined;
 
+  // Pi and DeepSeek Harness are newer optional stores. A default `doctor`
+  // (no --source flag) reports a missing store without failing the run;
+  // `--source pi` / `--source deepseek` still treats absence as an error.
+  const pushOptionalCheck = (check: {
+    readonly name: ProviderKind;
+    readonly ok: boolean;
+    readonly missing?: boolean;
+    readonly message: string;
+  }): void => {
+    const optionalMissing = !options.filterExplicit && check.missing === true;
+    checks.push({
+      name: check.name,
+      ok: check.ok || optionalMissing,
+      message: optionalMissing ? `${check.message} (optional)` : check.message,
+    });
+  };
+
   const tasks: Array<Promise<void>> = [];
 
   if (shouldCheck("opencode")) {
@@ -311,10 +330,28 @@ async function runDoctor(options: CliOptions, io: CliIO): Promise<number> {
     })());
   }
 
+  if (shouldCheck("pi")) {
+    tasks.push((async () => {
+      pushOptionalCheck(await runPiDoctor());
+    })());
+  }
+
+  if (shouldCheck("deepseek")) {
+    tasks.push((async () => {
+      pushOptionalCheck(await runDeepSeekDoctor());
+    })());
+  }
+
   await Promise.all(tasks);
 
-  // Deterministic order: opencode, codex, antigravity
-  const order: Record<ProviderKind, number> = { opencode: 0, codex: 1, antigravity: 2 };
+  // Deterministic order: opencode, codex, antigravity, pi, deepseek
+  const order: Record<ProviderKind, number> = {
+    opencode: 0,
+    codex: 1,
+    antigravity: 2,
+    pi: 3,
+    deepseek: 4,
+  };
   checks.sort((a, b) => order[a.name] - order[b.name]);
 
   const ok = checks.length > 0 ? checks.every((check) => check.ok) : false;

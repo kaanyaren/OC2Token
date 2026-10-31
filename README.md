@@ -5,14 +5,14 @@
 <h1 align="center">OC2Token</h1>
 
 <p align="center">
-  <strong>macOS-first terminal dashboard for OpenCode&nbsp;2 token usage</strong><br/>
-  Unified, privacy-preserving telemetry for <code>opencode</code> · <code>codex</code> · <code>antigravity</code>
+  <strong>macOS-first terminal dashboard for coding-agent token usage</strong><br/>
+  Unified, privacy-preserving telemetry for <code>opencode</code> · <code>codex</code> · <code>antigravity</code> · <code>pi</code> · <code>deepseek</code>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/oc2token"><img src="https://img.shields.io/npm/v/oc2token?style=flat-square&color=8B5CF6&label=npm" alt="npm version" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-ff8700?style=flat-square" alt="MIT license" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-00d7ff?style=flat-square" alt="node >=20" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22.12-00d7ff?style=flat-square" alt="node >=22.12" /></a>
   <a href="#platform"><img src="https://img.shields.io/badge/platform-macOS%20%E2%80%A2%20Linux-lightgrey?style=flat-square" alt="macOS • Linux" /></a>
   <a href="https://github.com/kaanyaren/OC2Token/issues"><img src="https://img.shields.io/github/issues/kaanyaren/OC2Token?style=flat-square&color=9a8fc2" alt="issues" /></a>
 </p>
@@ -27,7 +27,7 @@
 
 OpenCode 2 records rich token telemetry locally, but the raw message stream is noisy and per-provider. **OC2Token** is a single, fast, terminal-native console that:
 
-- aggregates **all three providers** (`opencode`, `codex`, `antigravity`) into one unified report
+- aggregates **five providers** (`opencode`, `codex`, `antigravity`, `pi`, `deepseek`) into one unified report
 - shows four exact windows — **last 60 minutes · today · this week · last month** (a rolling 30 days) — with local-day and ISO-week semantics
 - visualises a **sparkline trend**, per-model / per-provider / per-project breakdowns, and coverage status without ever persisting prompts or keys
 - stays instantly usable over pipes (`--json`, `--format table`) for CI and scripting
@@ -38,7 +38,7 @@ OpenCode 2 records rich token telemetry locally, but the raw message stream is n
 
 ## ✨ Highlights
 
-- **Unified multi-provider** — one snapshot, one schema, three colours (purple · orange · cyan)
+- **Unified multi-provider** — one snapshot, one schema, five provider accents (purple · orange · cyan · green · blue)
 - **Four exact windows** rendered responsively, from one row down to 20-column terminals
 - **CodeBurn-inspired palette** — violet structure, orange focus, cyan inputs; `--no-color` / `NO_COLOR` safe
 - **Trend sparkline** per window, not one row per bucket
@@ -112,7 +112,7 @@ npm install -g oc2token
 npx oc2token
 ```
 
-Requires **Node.js ≥ 20**. The OpenCode 2 local service must be reachable; OC2Token talks to it via `@opencode-ai/client` (beta API subject to change).
+Requires **Node.js ≥ 22.12**. The OpenCode 2 local service must be reachable; OC2Token talks to it via `@opencode-ai/client` (beta API subject to change). Reading compressed DeepSeek Harness sessions uses Node's built-in Zstandard API (Node ≥ 22.15) or falls back to the `zstd` CLI.
 
 ### From source
 
@@ -196,7 +196,7 @@ Options:
   --timezone <IANA>      Zone for local day / ISO week boundaries
   --project <id>         Restrict collection to an OpenCode project
   --cache-dir <path>     Override the normalized metadata cache directory
-  --source <provider>    Filter providers: opencode, codex, antigravity, or all (repeatable)
+  --source <provider>    Filter providers: opencode, codex, antigravity, pi, deepseek, or all (repeatable)
   --no-color             Disable ANSI colors
   -h, --help             Show help
   -v, --version          Show version
@@ -223,6 +223,8 @@ Options:
 ```sh
 oc2token --source codex                 # only Codex
 oc2token --source opencode --source codex  # two providers
+oc2token --source pi                    # only Pi sessions
+oc2token --source deepseek               # only DeepSeek Harness sessions
 oc2token --source all                   # reset filter (default)
 oc2token doctor --source antigravity --json
 ```
@@ -242,8 +244,10 @@ oc2token --once --json --source codex | jq .totals.day.recorded_total
 | **opencode** | OpenCode 2 local service (`@opencode-ai/client`) | session/message pagination with `tokenRevision` dedup |
 | **codex** | `~/.codex/sessions` rollouts (JSONL) | file scan + parse |
 | **antigravity** | Antigravity SQLite (`gen_metadata` protobuf via `node:sqlite` + `src/antigravity/proto.ts`) | proto + scanner |
+| **pi** | Pi session JSONL (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`, else `~/.pi/agent/sessions`) | file scan; assistant + `usage` entries; fork history skipped |
+| **deepseek** | DeepSeek Harness `dsh` sessions (`$DSH_HOME/sessions`, else `~/.dsh/sessions`) | newest `session[.vN].jsonl[.zstd]` generation; zstd frames decoded via Node or the `zstd` CLI |
 
-All three emit the same `UsageRecord` shape and are merged by `Aggregator → CachedUsageSource → Dashboard`. `doctor` reports each independently:
+All five emit the same `UsageRecord` shape and are merged by `Aggregator → CachedUsageSource → Dashboard`. `doctor` reports each independently:
 
 ```sh
 oc2token doctor
@@ -251,6 +255,8 @@ oc2token doctor
 # ✓ opencode: OpenCode 2 service OK
 # ✓ codex: 14 sessions scanned
 # ✓ antigravity: 3 projects indexed
+# ✓ pi: Found 3 Pi session file(s); usage found
+# ✓ deepseek: Found 2 DeepSeek session file(s); usage found
 ```
 
 ---
@@ -342,12 +348,12 @@ All collection is local-first; no network calls besides the loopback OpenCode se
 ## 🧭 How it works
 
 ```
-┌─────────────┐  ┌─────────────┐  ┌──────────────┐
-│  opencode   │  │    codex    │  │ antigravity  │
-│ transport   │  │   scanner   │  │   scanner    │
-└──────┬──────┘  └──────┬──────┘  └──────┬───────┘
-       │                │                │
-       └────────────────┼────────────────┘
+┌─────────────┐  ┌─────────────┐  ┌──────────────┐  ┌────────┐  ┌──────────┐
+│  opencode   │  │    codex    │  │ antigravity  │  │   pi   │  │ deepseek │
+│ transport   │  │   scanner   │  │   scanner    │  │ scanner│  │ scanner  │
+└──────┬──────┘  └──────┬──────┘  └──────┬───────┘  └───┬────┘  └────┬─────┘
+       │                │                │              │            │
+       └────────────────┴────────────────┴──────────────┴────────────┘
                         ▼
                  ┌─────────────┐
                  │ Aggregator  │  dedup by sessionID/messageID + tokenRevision
@@ -386,6 +392,9 @@ src/
   opencode/     transport & doctor
   codex/        rollout discovery & scanner
   antigravity/  sqlite + proto + scanner
+  pi/           session JSONL discovery & scanner
+  deepseek/     dsh generation discovery, zstd frames & scanner
+  usage/        shared record-result finalization
   cache/        filesystem lock & store (schema 2)
   dashboard/    render, state, settings
   domain/       windows, tokens, records, contracts

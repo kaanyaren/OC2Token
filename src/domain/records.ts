@@ -11,7 +11,7 @@ import type { ProviderKind } from "./contracts.js";
 
 export type UsageRecordCompleteness = "final" | "provisional";
 
-export const PROVIDER_KINDS = ["opencode", "codex", "antigravity"] as const;
+export const PROVIDER_KINDS = ["opencode", "codex", "antigravity", "pi", "deepseek"] as const;
 
 export function isProviderKind(value: unknown): value is ProviderKind {
   return (

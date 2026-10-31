@@ -613,8 +613,8 @@ function recordsAsBreakdown(
     const rawName = asOptionalString(record[key]);
     let name: string | undefined;
     if (key === "provider") {
-      // Unify on raw provider names ("opencode", "codex", "antigravity") to
-      // match Unified totalsByProvider keys. The vendor (openai, anthropic…)
+      // Unify on raw provider names ("opencode", "codex", "antigravity",
+      // "pi", "deepseek") to match Unified totalsByProvider keys. The vendor (openai, anthropic…)
       // lives in the model prefix ("openai/gpt-5") and is shown in the Models
       // breakdown — do NOT split "opencode" into its vendor here, otherwise
       // records-derived Providers ("openai") diverge from raw ("opencode").
@@ -700,7 +700,13 @@ function breakdownFromMap(value: unknown): ReadonlyArray<BreakdownTotal> | null 
 }
 
 function keyIsProvider(value: string): boolean {
-  return value === "opencode" || value === "codex" || value === "antigravity";
+  return (
+    value === "opencode" ||
+    value === "codex" ||
+    value === "antigravity" ||
+    value === "pi" ||
+    value === "deepseek"
+  );
 }
 
 function breakdownForWindow(
@@ -724,7 +730,9 @@ function breakdownForWindow(
     const aliasMap = breakdownFromMap(aliasScoped);
     if (aliasMap !== null) return aliasMap;
     const aliasGlobal = asRecord(root.totalsByProvider ?? {});
-    const hasProviderKeys = ["opencode", "codex", "antigravity"].some((provider) => provider in aliasGlobal);
+    const hasProviderKeys = ["opencode", "codex", "antigravity", "pi", "deepseek"].some(
+      (provider) => provider in aliasGlobal,
+    );
     if (hasProviderKeys) {
       const globalMap = breakdownFromMap(aliasGlobal);
       if (globalMap !== null) return globalMap;

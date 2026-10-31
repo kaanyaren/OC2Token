@@ -68,6 +68,14 @@ export function themeCyan(value: string, enabled: boolean, bright = false): stri
   return paint(value, ANSI.cyan, enabled);
 }
 
+export function themeGreen(value: string, enabled: boolean, bright = false): string {
+  return paint(value, ANSI.green, enabled);
+}
+
+export function themeBlue(value: string, enabled: boolean, bright = false): string {
+  return paint(value, ANSI.blue, enabled);
+}
+
 export function themeIn(value: string, enabled: boolean): string {
   return paint(value, ANSI.cyan, enabled);
 }
