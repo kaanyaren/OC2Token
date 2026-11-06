@@ -488,9 +488,9 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   let projectsVisible = false;
   let running = true;
 
-  // Breakdown table collapse state. Ephemeral — resets to collapsed on each
-  // refresh so new data starts compact. Not persisted.
-  let collapsedTables = { models: true, providers: true, projects: true };
+  // Breakdown table collapse state. Kept across refreshes so an expanded table
+  // stays expanded. Not persisted to disk.
+  const collapsedTables = { models: true, providers: true, projects: true };
   // Which breakdown table has keyboard focus (when settings panel is closed).
   let focusedTable: "models" | "providers" | "projects" = "models";
 
@@ -670,9 +670,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   };
 
   coordinator.subscribe(() => {
-    // Collapse state is ephemeral: reset to collapsed on each refresh so new
-    // data starts compact. The user can re-expand within the session.
-    collapsedTables = { models: true, providers: true, projects: true };
+    // Keep the user's collapse choices across refreshes.
     draw();
   });
   const onSignal = () => { void stop(); };

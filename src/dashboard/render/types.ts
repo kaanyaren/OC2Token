@@ -208,8 +208,7 @@ export interface DashboardRenderOptions {
   readonly projects?: DashboardProjectsView;
   /**
    * Per-table collapse state. A table collapses when it has more than
-   * COLLAPSE_THRESHOLD rows and its flag is true. Ephemeral view state —
-   * resets to collapsed on each refresh, not persisted.
+   * COLLAPSE_THRESHOLD rows and its flag is true. View-only state, not persisted.
    */
   readonly collapsedTables?: {
     readonly models?: boolean;
