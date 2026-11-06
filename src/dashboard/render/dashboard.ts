@@ -27,6 +27,7 @@ import {
   coverageState,
   DASHBOARD_ROW_CAP,
   formatCoverage,
+  formatCacheRatio,
   formatCost,
   formatExactTokenCount,
   formatStatusFooter,
@@ -236,7 +237,14 @@ function cardLines(
   const frame = (value: string): string => `│${pad(value, inner)}│`;
   const costLabel = inner < 15 ? "Cost" : "Est. cost";
   const costValue = formatCost(window.cost);
-  const costLine = `${themePurple(costLabel, color, true)}  ${themeCost(costValue, color)}`;
+  const cacheRatio = formatCacheRatio(window.totals);
+  // Keep the cache ratio after the cost without overflowing the card border.
+  const costParts = [
+    `${themePurple(costLabel, color, true)}  ${themeCost(costValue, color)} · ${themePurple("Cache", color, true)} ${themeCache(cacheRatio, color)}`,
+    `${themeCost(costValue, color)} · ${themePurple("Cache", color, true)} ${themeCache(cacheRatio, color)}`,
+    `${themeCost(costValue, color)} ${themeCache(cacheRatio, color)}`,
+  ];
+  const costLine = costParts.find((line) => lineWidth(line) <= inner) ?? truncateExact(costParts.at(-1)!, inner);
   const lines = [
     paint(border(width, "╭", "─", "╮"), borderColor, color),
     frame(emphasis(themeWhite(truncate(title, inner), color, true), color)),
@@ -481,6 +489,7 @@ interface BreakdownColumnWidths {
   readonly input: number;
   readonly output: number;
   readonly cache: number;
+  readonly cachePct: number;
   readonly cost: number;
 }
 
@@ -489,12 +498,14 @@ function breakdownColumnWidths(values: ReadonlyArray<BreakdownTotal>): Breakdown
   const input = values.map((item) => formatTokenCount(item.totals.input));
   const output = values.map((item) => formatTokenCount(item.totals.output + item.totals.reasoning));
   const cache = values.map((item) => formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite));
+  const cachePct = values.map((item) => formatCacheRatio(item.totals));
   const cost = values.map((item) => formatCost(item.cost));
   return {
     recorded: Math.max("RECORDED".length, ...recorded.map((value) => [...value].length)),
     input: Math.max("In".length, ...input.map((value) => [...value].length)),
     output: Math.max("Out".length, ...output.map((value) => [...value].length)),
     cache: Math.max("Cache".length, ...cache.map((value) => [...value].length)),
+    cachePct: Math.max("Cache%".length, ...cachePct.map((value) => [...value].length)),
     cost: Math.max("Cost".length, ...cost.map((value) => [...value].length)),
   };
 }
@@ -537,26 +548,30 @@ function renderBreakdown(
   const isProvider = title.toLowerCase().includes("provider");
   const showTokenDetails = width >= 70;
   const showCost = width >= 32;
+  const showCachePct = showCost;
   // Keep the complete numeric block against the right edge of the terminal.
   // The name column gets the remaining space instead of using a fixed 42%
   // width, which previously left all numeric columns beside the names.
   const numericWidth = columnWidths.recorded
     + (showTokenDetails ? columnWidths.input + columnWidths.output + columnWidths.cache : 0)
+    + (showCachePct ? columnWidths.cachePct : 0)
     + (showCost ? columnWidths.cost : 0);
-  const separatorWidth = showTokenDetails ? 9 : showCost ? 5 : 3;
+  const separatorWidth = showTokenDetails ? 10 : showCost ? 7 : 3;
   const nameWidth = Math.max(1, width - numericWidth - separatorWidth);
-  // Table-aligned In/Out/Cache/Cost columns: header already shows labels, rows show only numbers.
-  // Header uses same column widths so values line up vertically (right-aligned numbers).
+  // Table-aligned In/Out/Cache/Cache%/Cost columns: header already shows
+  // labels, rows show only numbers. Header uses same column widths so values
+  // line up vertically (right-aligned numbers).
   const headerIn = themeIn("In".padStart(columnWidths.input), color);
   const headerOut = themeOut("Out".padStart(columnWidths.output), color);
   const headerCache = themeCache("Cache".padStart(columnWidths.cache), color);
+  const headerCachePct = themeCache("Cache%".padStart(columnWidths.cachePct), color);
   const headerCost = themeCost("Cost".padStart(columnWidths.cost), color);
   const details = showTokenDetails
     ? showCost
-      ? `  ${headerIn} ${headerOut} ${headerCache}  ${headerCost}`
+      ? `  ${headerIn} ${headerOut} ${headerCache} ${headerCachePct}  ${headerCost}`
       : `  ${headerIn} ${headerOut} ${headerCache}`
     : showCost
-      ? `  ${headerCost}`
+      ? `  ${headerCachePct}  ${headerCost}`
       : "";
   lines.push(`  ${themePurple("NAME".padEnd(nameWidth), color, true)} ${themeOrange("RECORDED".padStart(columnWidths.recorded), color, true)}${details}`);
   for (const [rowIndex, item] of visible.entries()) {
@@ -568,17 +583,19 @@ function renderBreakdown(
     const inPlain = formatTokenCount(item.totals.input);
     const outPlain = formatTokenCount(item.totals.output + item.totals.reasoning);
     const cachePlain = formatTokenCount(item.totals.cacheRead + item.totals.cacheWrite);
+    const cachePctPlain = formatCacheRatio(item.totals);
     const costPlain = formatCost(item.cost);
     const inCol = themeIn(inPlain.padStart(columnWidths.input), color);
     const outCol = themeOut(outPlain.padStart(columnWidths.output), color);
     const cacheCol = themeCache(cachePlain.padStart(columnWidths.cache), color);
+    const cachePctCol = themeCache(cachePctPlain.padStart(columnWidths.cachePct), color);
     const costCol = themeCost(costPlain.padStart(columnWidths.cost), color);
     const componentDetails = showTokenDetails
       ? showCost
-        ? `  ${inCol} ${outCol} ${cacheCol}  ${costCol}`
+        ? `  ${inCol} ${outCol} ${cacheCol} ${cachePctCol}  ${costCol}`
         : `  ${inCol} ${outCol} ${cacheCol}`
       : showCost
-        ? `  ${costCol}`
+        ? `  ${cachePctCol}  ${costCol}`
         : "";
     if (isProvider) {
       const accentForRow = providerAccent(item.name, color, true);

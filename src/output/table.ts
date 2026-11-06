@@ -5,6 +5,7 @@ import {
   type DashboardSnapshotInput,
 } from "../dashboard/render/types.js";
 import {
+  formatCacheRatio,
   formatCost,
   formatCoverage,
   formatExactTokenCount,
@@ -33,6 +34,7 @@ function breakdownRows(values: ReadonlyArray<BreakdownTotal>): string[][] {
       formatExactTokenCount(item.totals.input),
       formatExactTokenCount(item.totals.output + item.totals.reasoning),
       formatExactTokenCount(item.totals.cacheRead + item.totals.cacheWrite),
+      formatCacheRatio(item.totals),
       formatCost(item.cost),
     ];
   });
@@ -46,7 +48,8 @@ function breakdownWidths(values: ReadonlyArray<BreakdownTotal>): number[] {
     Math.max("In".length, ...rows.map((row) => row[2].length)),
     Math.max("Out".length, ...rows.map((row) => row[3].length)),
     Math.max("Cache".length, ...rows.map((row) => row[4].length)),
-    Math.max("Cost".length, ...rows.map((row) => row[5].length)),
+    Math.max("Cache%".length, ...rows.map((row) => row[5].length)),
+    Math.max("Cost".length, ...rows.map((row) => row[6].length)),
   ];
 }
 
@@ -64,7 +67,7 @@ function renderSection(
 
   const rows = breakdownRows(values);
   const widths = sharedWidths ?? breakdownWidths(values);
-  lines.push(tableRow(["Name", "Recorded", "In", "Out", "Cache", "Cost"], widths));
+  lines.push(tableRow(["Name", "Recorded", "In", "Out", "Cache", "Cache%", "Cost"], widths));
   lines.push(tableRow(widths.map((width) => "-".repeat(width)), widths));
   lines.push(...rows.map((row) => tableRow(row, widths)));
   if (values.length > rows.length) lines.push(`  +${values.length - rows.length} more`);
@@ -75,7 +78,7 @@ function renderSection(
 export function renderTable(input: DashboardSnapshotInput): string {
   const snapshot = normalizeDashboardSnapshot(input);
   const rows: string[][] = [
-    ["Window", "Recorded", "In", "Out", "Cache", "Cost"],
+    ["Window", "Recorded", "In", "Out", "Cache", "Cache%", "Cost"],
   ];
   for (const kind of allWindowKinds()) {
     const win = snapshot.windows[kind];
@@ -86,6 +89,7 @@ export function renderTable(input: DashboardSnapshotInput): string {
       formatExactTokenCount(totals.input),
       formatExactTokenCount(totals.output + totals.reasoning),
       formatExactTokenCount(totals.cacheRead + totals.cacheWrite),
+      formatCacheRatio(totals),
       formatCost(win.cost),
     ]);
   }

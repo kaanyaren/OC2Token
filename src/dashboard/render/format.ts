@@ -144,6 +144,20 @@ export function formatTokenBreakdown(totals: {
   ].join("    ");
 }
 
+/**
+ * Share of prompt-side tokens served from cache: cacheRead / (input +
+ * cacheRead + cacheWrite). Returns "—" when no prompt tokens were recorded.
+ */
+export function formatCacheRatio(totals: {
+  readonly input: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}): string {
+  const prompt = totals.input + totals.cacheRead + totals.cacheWrite;
+  if (!Number.isFinite(prompt) || prompt <= 0) return "—";
+  return `${Math.round((totals.cacheRead / prompt) * 100)}%`;
+}
+
 export function formatNextRefresh(
   nextRefreshAt: DateLike | null,
   now: DateLike | null | undefined,

@@ -262,7 +262,7 @@ test("piped breakdown tables share right-aligned numeric column edges", () => {
     assert.ok(start >= 0, `missing ${title} table`);
     const header = table.slice(start).split("\n").find((line) => line.includes("Recorded"));
     assert.ok(header !== undefined, `missing ${title} header`);
-    return ["Recorded", "In", "Out", "Cache", "Cost"].map((label) => header.indexOf(label) + label.length);
+    return ["Recorded", "In", "Out", "Cache", "Cache%", "Cost"].map((label) => header.indexOf(label) + label.length);
   };
 
   assert.deepEqual(endsFor("Models"), endsFor("Providers"));
@@ -462,7 +462,7 @@ test("breakdown tables share right-aligned numeric column edges", () => {
     const row = output.slice(start).split("\n").find((line) => line.includes(rowName));
     assert.ok(row !== undefined, `missing ${title} row`);
     assert.equal(row.length, 100, `${title} numeric row should reach the right edge`);
-    return ["RECORDED", "In", "Out", "Cache", "Cost"].map((label) => header.indexOf(label) + label.length);
+    return ["RECORDED", "In", "Out", "Cache", "Cache%", "Cost"].map((label) => header.indexOf(label) + label.length);
   };
 
   assert.deepEqual(endsFor("Models", "model"), endsFor("Providers", "provider"));
@@ -575,6 +575,23 @@ test("breakdown table at or below threshold renders normally with no collapse UI
   assert.doesNotMatch(plain, /click to expand/);
   const modelRows = plain.split("\n").filter((line) => /model-\d/.test(line));
   assert.equal(modelRows.length, 3);
+});
+
+test("cards show the cache ratio after estimated cost", () => {
+  const plain = renderDashboard(fixture(), { isTTY: false, color: false, width: 140, selectedWindow: "day", now: NOW });
+  // input 100 + cacheRead 4 + cacheWrite 5 => 4%.
+  assert.match(plain, /Est\. cost\s+\$[\d.]+\s+·\s+Cache 4%/);
+});
+
+test("breakdown tables show the cache ratio before cost", () => {
+  const plain = renderDashboard(fixture(), { isTTY: false, color: false, width: 100, selectedWindow: "day", now: NOW });
+  const header = plain.split("\n").find((line) => line.includes("RECORDED"));
+  assert.ok(header !== undefined);
+  assert.ok(header.indexOf("Cache%") > header.indexOf("Cache"));
+  assert.ok(header.indexOf("Cost") > header.indexOf("Cache%"));
+  const modelRow = plain.split("\n").find((line) => line.includes("gpt-5"));
+  assert.ok(modelRow !== undefined);
+  assert.match(modelRow, /4%\s+\$[\d.]+/);
 });
 
 test("focused table header shows a focus marker", () => {
