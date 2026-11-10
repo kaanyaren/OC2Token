@@ -543,12 +543,19 @@ function renderTrend(
   color: boolean,
   width: number,
 ): string[] {
-  const trend = cardWindow(snapshot, selected).trends;
+  let trend = cardWindow(snapshot, selected).trends;
   const title = `Trend · ${cardTitle(selected).toLowerCase()}`;
   if (trend.length === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
 
   const max = Math.max(...trend.map((bucket) => bucket.totals.recorded_total), 0);
   if (max === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
+
+  // The day graph starts at the first token use, not midnight, so sleep time
+  // does not consume the left half of the chart.
+  if (selected === "day") {
+    const firstUsage = trend.findIndex((bucket) => bucket.totals.recorded_total > 0);
+    if (firstUsage > 0) trend = trend.slice(firstUsage);
+  }
 
   const levels = 5;
   // Y axis: each row is labeled with its threshold value, zero on the axis

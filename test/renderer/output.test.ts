@@ -487,6 +487,32 @@ test("trend panel renders a graph rather than one textual row per bucket", () =>
   assert.doesNotMatch(trendPanel, /bucket-0/);
 });
 
+test("today graph starts at the first usage bucket", () => {
+  const trends = Array.from({ length: 12 }, (_, index) => ({
+    label: `${String(index).padStart(2, "0")}:00`,
+    totals: toUsageTotals({
+      input: index < 4 ? 0 : 10,
+      output: 0,
+      reasoning: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    }),
+  }));
+  const output = renderDashboard(fixture({ trends: { day: trends } }), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    selectedWindow: "day",
+    now: NOW,
+  });
+  const start = output.indexOf("Trend · today");
+  const end = output.indexOf("◆ Models", start);
+  assert.ok(start >= 0 && end > start);
+  const panel = output.slice(start, end);
+  assert.match(panel, /04:00/);
+  assert.doesNotMatch(panel, /00:00/);
+});
+
 test("stats snapshots use persisted trend buckets when records are empty", () => {
   const output = renderDashboard(fixture({
     source: "stats",
