@@ -776,13 +776,14 @@ function renderSettingsPanel(
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
-  // Breakdown tables heading
-  const tablesHeading = truncate("Tables  —  space to toggle", inner);
+  // Display toggles: breakdown tables plus the live TPS banner.
+  const tablesHeading = truncate("Display  —  space to toggle", inner);
   lines.push(padPrefix + `│${pad(themePurple(tablesHeading, color, true), inner)}│`);
 
   const tableRows: ReadonlyArray<{ readonly label: string; readonly shown: boolean; readonly index: number }> = [
     { label: "Providers table", shown: settings.showProvidersTable !== false, index: SETTINGS_ROWS.tables },
     { label: "Projects table", shown: settings.showProjectsTable !== false, index: SETTINGS_ROWS.tables + 1 },
+    { label: "Live TPS", shown: settings.showLiveTps !== false, index: SETTINGS_ROWS.tables + 2 },
   ];
   for (const row of tableRows) {
     const focused = settings.focusedIndex === row.index;
@@ -1104,7 +1105,7 @@ function renderFooter(
       `  ${key("r/R")} Refresh now   ${key(slotRange)} Select visible card   ${key("Tab/Arrows")} Navigate cards`,
       `  ${key("Space")} Expand/collapse breakdown table   ${key("p")} Projects panel   ${key("s")} Settings`,
       `  Click: cards select · table headers/hints collapse · footer acts · ${key("q")} Quit   ${key("?")} Close help`,
-      `  Settings: providers · tables · card slots (${periodWide}) · refresh slider`,
+      `  Settings: providers · display · card slots (${periodWide}) · refresh slider`,
     ];
   }
   if (width < 50) {
@@ -1243,7 +1244,7 @@ export function renderDashboard(
     for (const card of cards) lines.push(...card);
   }
 
-  if (options.liveTps !== undefined) {
+  if (options.liveTps !== undefined && options.settings?.showLiveTps !== false) {
     lines.push(...renderLiveTps(options.liveTps, color, width, options.height));
   }
 

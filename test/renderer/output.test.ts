@@ -235,6 +235,22 @@ test("live TPS banner sits under the cards and falls back when narrow", () => {
   const absent = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
   assert.doesNotMatch(absent, /EST\. LIVE TPS/);
 
+  const hiddenBySetting = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    now: NOW,
+    liveTps: live,
+    settings: {
+      visible: false,
+      enabledProviders: ["opencode"],
+      refreshIntervalSeconds: 300,
+      focusedIndex: 0,
+      showLiveTps: false,
+    },
+  });
+  assert.doesNotMatch(hiddenBySetting, /EST\. LIVE TPS/);
+
   const narrow = renderDashboard(fixture(), {
     isTTY: true,
     color: false,
@@ -820,11 +836,13 @@ test("breakdown tables toggle from settings and default to shown", () => {
   // Legacy settings files without the flags show both tables.
   assert.equal(normalizeSettings({}).showProvidersTable, true);
   assert.equal(normalizeSettings({}).showProjectsTable, true);
+  assert.equal(normalizeSettings({}).showLiveTps, true);
   assert.equal(normalizeSettings(null).showProvidersTable, true);
   assert.equal(
     normalizeSettings({ showProvidersTable: false, showProjectsTable: false }).showProvidersTable,
     false,
   );
+  assert.equal(normalizeSettings({ showLiveTps: false }).showLiveTps, false);
 
   const windows = Object.values(createUsageWindows(NOW, "UTC"));
   const totals = toUsageTotals({ input: 10, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0 });
@@ -1159,6 +1177,7 @@ test("settings panel lists the four card slots", () => {
   // Inactive slots preview the remembered wide set, dimmed.
   assert.match(plain, /Card 6: Month/);
   assert.match(plain, /Cards shown: 4/);
+  assert.match(plain, /◉ Live TPS/);
 });
 
 test("settings focus index order follows the rendered row order", () => {
@@ -1196,6 +1215,7 @@ test("settings focus index order follows the rendered row order", () => {
     "○ deepseek",
     "◉ Providers table",
     "◉ Projects table",
+    "◉ Live TPS",
     "Card 1: 15m",
     "Card 2: Hour",
     "Card 3: Today",

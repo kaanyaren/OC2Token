@@ -176,6 +176,8 @@ export interface DashboardSettingsView {
   readonly showProvidersTable?: boolean;
   /** Show the Projects breakdown table. Undefined (legacy) means shown. */
   readonly showProjectsTable?: boolean;
+  /** Show the live aggregate TPS banner. Undefined (legacy) means shown. */
+  readonly showLiveTps?: boolean;
   /** Four or six visible top cards. Undefined (legacy) means hour/day/week/month. */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
   /**

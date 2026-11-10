@@ -475,7 +475,6 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   };
   const fallback = emptyCollectionResult(clock.wallNow(), options.timezone);
   const liveTps = createLiveTpsMeter();
-  liveTps.start();
   const coordinator = new RefreshCoordinator({
     source: adapterSource.source,
     clock,
@@ -507,6 +506,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     refreshIntervalSeconds: number;
     showProvidersTable: boolean;
     showProjectsTable: boolean;
+    showLiveTps: boolean;
     visibleCards: DashboardCardKind[];
     /** Opposite-size set remembered across count toggles. */
     inactiveCards: DashboardCardKind[];
@@ -517,6 +517,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     refreshIntervalSeconds: initialSettingsInterval,
     showProvidersTable: persisted?.showProvidersTable !== false,
     showProjectsTable: persisted?.showProjectsTable !== false,
+    showLiveTps: persisted?.showLiveTps !== false,
     visibleCards: normalizeVisibleCards(persisted?.visibleCards),
     inactiveCards: normalizeVisibleCards(
       persisted?.inactiveCards,
@@ -531,6 +532,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     : settingsState.visibleCards[0]!;
   let appliedEnabled = new Set(settingsState.enabledProviders);
   let appliedInterval = initialSchedulerInterval;
+  if (settingsState.showLiveTps) liveTps.start();
 
   const persistCurrentSettings = (): void => {
     void saveDashboardSettings({
@@ -538,6 +540,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settingsState.refreshIntervalSeconds),
       showProvidersTable: settingsState.showProvidersTable,
       showProjectsTable: settingsState.showProjectsTable,
+      showLiveTps: settingsState.showLiveTps,
       visibleCards: [...settingsState.visibleCards],
       inactiveCards: [...settingsState.inactiveCards],
     }, options.cacheDirectory);
@@ -579,6 +582,15 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     }
     const updated = settingsState.visibleCards;
     if (!updated.includes(selectedCard)) selectedCard = updated[0]!;
+    persistCurrentSettings();
+    draw();
+  };
+
+  /** Toggle the live TPS banner and its event subscription. */
+  const toggleLiveTps = (): void => {
+    settingsState.showLiveTps = !settingsState.showLiveTps;
+    if (settingsState.showLiveTps) liveTps.start();
+    else liveTps.stop();
     persistCurrentSettings();
     draw();
   };
@@ -648,6 +660,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         refreshIntervalSeconds: settingsState.refreshIntervalSeconds,
         showProvidersTable: settingsState.showProvidersTable,
         showProjectsTable: settingsState.showProjectsTable,
+        showLiveTps: settingsState.showLiveTps,
         visibleCards: [...settingsState.visibleCards],
         inactiveCards: [...settingsState.inactiveCards],
         focusedIndex: settingsState.focusedIndex,
@@ -743,6 +756,11 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
           settingsState.showProjectsTable = !settingsState.showProjectsTable;
           persistCurrentSettings();
           draw();
+          return;
+        }
+        if (hasBox && line.includes("Live TPS")) {
+          settingsState.focusedIndex = SETTINGS_ROWS.tables + 2;
+          toggleLiveTps();
           return;
         }
         const cardSlot = line.match(/Card ([1-6]):/);
@@ -1153,6 +1171,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               settingsState.showProjectsTable = !settingsState.showProjectsTable;
               persistCurrentSettings();
               draw();
+            } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables + 2) {
+              toggleLiveTps();
             } else if (
               settingsState.focusedIndex >= SETTINGS_ROWS.cards &&
               settingsState.focusedIndex < SETTINGS_ROWS.cards + 6
@@ -1258,6 +1278,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
             settingsState.showProjectsTable = !settingsState.showProjectsTable;
             persistCurrentSettings();
             draw();
+          } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables + 2) {
+            toggleLiveTps();
           }
           i += 1;
           continue;

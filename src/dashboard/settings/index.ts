@@ -32,8 +32,8 @@ const LEGACY_ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
 
 /**
  * Settings focus rows, numbered in the order the panel *renders* them:
- * providers (0-4) -> tables (5-6) -> card slots (7-12) -> card count (13)
- * -> refresh interval (14).
+ * providers (0-4) -> display toggles (5-7) -> card slots (8-13) -> card count
+ * (14) -> refresh interval (15).
  *
  * All six slot rows always render; slots at or past the visible count are
  * dimmed placeholders so the indices below never shift when toggling
@@ -45,10 +45,10 @@ const LEGACY_ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
 export const SETTINGS_ROWS = {
   providers: 0,
   tables: 5,
-  cards: 7,
-  cardCount: 13,
-  refresh: 14,
-  count: 15,
+  cards: 8,
+  cardCount: 14,
+  refresh: 15,
+  count: 16,
 } as const;
 
 export interface DashboardSettings {
@@ -58,6 +58,8 @@ export interface DashboardSettings {
   readonly showProvidersTable?: boolean;
   /** Show the Projects breakdown table (default true for legacy files). */
   readonly showProjectsTable?: boolean;
+  /** Show the live aggregate TPS banner (default true for legacy files). */
+  readonly showLiveTps?: boolean;
   /** Four or six visible top cards (default hour/day/week/month for legacy files). */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
   /** Inactive card set of the opposite size (remembered across count toggles). */
@@ -156,6 +158,7 @@ export function normalizeSettings(value: unknown): DashboardSettings {
       refreshIntervalSeconds: SETTINGS_DEFAULT_REFRESH_SECONDS,
       showProvidersTable: true,
       showProjectsTable: true,
+      showLiveTps: true,
       visibleCards: [...DEFAULT_VISIBLE_CARDS],
       inactiveCards: [...DEFAULT_WIDE_CARDS],
     };
@@ -176,6 +179,7 @@ export function normalizeSettings(value: unknown): DashboardSettings {
     // Missing (legacy settings.json) means shown.
     showProvidersTable: record.showProvidersTable !== false,
     showProjectsTable: record.showProjectsTable !== false,
+    showLiveTps: record.showLiveTps !== false,
     // Missing (legacy settings.json) means the legacy hour/day/week/month layout.
     visibleCards: active,
     inactiveCards: inactive,
@@ -233,6 +237,7 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
       refreshIntervalSeconds: clampRefreshIntervalSeconds(settings.refreshIntervalSeconds),
       showProvidersTable: settings.showProvidersTable !== false,
       showProjectsTable: settings.showProjectsTable !== false,
+      showLiveTps: settings.showLiveTps !== false,
       visibleCards: active,
       inactiveCards: normalizeVisibleCards(settings.inactiveCards, active.length > 4 ? 4 : 6),
     },

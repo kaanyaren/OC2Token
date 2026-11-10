@@ -255,6 +255,7 @@ export function createLiveTpsMeter(options: LiveTpsMeterOptions = {}): LiveTpsMe
       running = false;
       lifecycle?.abort();
       subscription?.abort();
+      aggregator.reset();
       available = false;
     },
     snapshot(now = Date.now()): LiveTpsSnapshot {
