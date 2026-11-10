@@ -409,20 +409,19 @@ const LIVE_TPS_GLYPHS_5: Readonly<Record<string, readonly string[]>> = {
   ".": ["00000", "00000", "00000", "00000", "00100"],
 };
 
-// Purpose-built 4-row compact face for the 2-line size. It keeps the 4
-// crossbar and draws lower strokes in the lower half of the second row, so it
-// reads as a complete face rather than a cropped taller font.
+// Purpose-built 4-row, 5-column face for the 2-line size. Every digit pair
+// differs by at least three pixels, so close values stay distinguishable.
 const LIVE_TPS_GLYPHS_2: Readonly<Record<string, readonly string[]>> = {
-  "0": ["11111", "10001", "10001", "11111"],
-  "1": ["00100", "00100", "00100", "00100"],
+  "0": ["01110", "10001", "10001", "01110"],
+  "1": ["01100", "00100", "00100", "01110"],
   "2": ["11111", "00001", "10000", "11111"],
-  "3": ["11111", "00001", "00001", "11111"],
+  "3": ["11111", "00001", "00101", "11111"],
   "4": ["10001", "10001", "11111", "00001"],
   "5": ["11111", "10000", "11111", "11111"],
-  "6": ["11111", "10000", "10000", "11111"],
+  "6": ["11111", "10000", "10001", "11111"],
   "7": ["11111", "00001", "00001", "00001"],
-  "8": ["11111", "10001", "11111", "11111"],
-  "9": ["11111", "10001", "00001", "11111"],
+  "8": ["11111", "10101", "10101", "11111"],
+  "9": ["11111", "10001", "11111", "00001"],
   ".": ["00000", "00000", "00000", "00100"],
 };
 

@@ -324,6 +324,10 @@ test("live TPS size setting reserves 1, 2, 3, or 5 rows", () => {
   assert.equal(twoLine.length, 2);
   assert.equal(twoLine.filter((line) => /[█▀▄]/.test(line)).length, 2);
   assert.match(twoLine[1]!, /EST\. LIVE TPS · 2 ACTIVE/);
+  const digitRows = Array.from({ length: 10 }, (_, digit) =>
+    renderLiveTps({ available: true, tps: 10 + digit, activeSessions: 1 }, false, 100, 2).join("\n"),
+  );
+  assert.equal(new Set(digitRows).size, 10);
 });
 
 test("live TPS color adapts to the 10-minute average", () => {
