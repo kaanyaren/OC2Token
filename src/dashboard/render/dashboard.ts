@@ -392,69 +392,60 @@ export function cardWindow(
   return isDerivedCardKind(kind) ? snapshot.derived[kind] : snapshot.windows[kind];
 }
 
-// 6-row bitmaps compressed into 3 terminal rows with half-block glyphs.
-// Each bitmap row is 3 columns; pairs of rows become ▀ / ▄ / █ / space.
-const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
-  "0": ["111", "101", "101", "101", "101", "111"],
-  "1": ["010", "110", "010", "010", "010", "111"],
-  "2": ["111", "001", "111", "100", "100", "111"],
-  "3": ["111", "001", "111", "001", "001", "111"],
-  "4": ["101", "101", "111", "001", "001", "001"],
-  "5": ["111", "100", "111", "001", "001", "111"],
-  "6": ["111", "100", "111", "101", "101", "111"],
-  "7": ["111", "001", "001", "001", "001", "001"],
-  "8": ["111", "101", "111", "101", "101", "111"],
-  "9": ["111", "101", "111", "001", "001", "111"],
-  ".": ["000", "000", "000", "000", "000", "010"],
+// Canonical 5-column face shared by every block TPS size. The 2-row and
+// 3-row variants are compacted/stretched from this same 5x5 bitmap, so all
+// sizes keep the same digit shapes and width.
+const LIVE_TPS_GLYPHS_5: Readonly<Record<string, readonly string[]>> = {
+  "0": ["11111", "10001", "10001", "10001", "11111"],
+  "1": ["00100", "01100", "00100", "00100", "01110"],
+  "2": ["11111", "00001", "11111", "10000", "11111"],
+  "3": ["11111", "00001", "11111", "00001", "11111"],
+  "4": ["10001", "10001", "11111", "00001", "00001"],
+  "5": ["11111", "10000", "11111", "00001", "11111"],
+  "6": ["11111", "10000", "11111", "10001", "11111"],
+  "7": ["11111", "00001", "00001", "00001", "00001"],
+  "8": ["11111", "11111", "11111", "11111", "11111"],
+  "9": ["11111", "10001", "11111", "00001", "11111"],
+  ".": ["00000", "00000", "00000", "00000", "00100"],
 };
 
-// 5-row full-block glyphs for the tallest TPS size.
-// 4-row, 5-column bitmaps compressed into 2 terminal rows for the compact
-// TPS size. The wider face keeps the digits distinct instead of reading like
-// a cropped 3-row font.
+// Purpose-built 4-row compact face for the 2-line size. It keeps the 4
+// crossbar and draws lower strokes in the lower half of the second row, so it
+// reads as a complete face rather than a cropped taller font.
 const LIVE_TPS_GLYPHS_2: Readonly<Record<string, readonly string[]>> = {
   "0": ["11111", "10001", "10001", "11111"],
   "1": ["00100", "00100", "00100", "00100"],
-  "2": ["11111", "00001", "11111", "10000"],
-  "3": ["11111", "00001", "11111", "00001"],
+  "2": ["11111", "00001", "10000", "11111"],
+  "3": ["11111", "00001", "00001", "11111"],
   "4": ["10001", "10001", "11111", "00001"],
-  "5": ["11111", "10000", "11111", "00001"],
-  "6": ["11111", "10000", "11111", "10001"],
+  "5": ["11111", "10000", "11111", "11111"],
+  "6": ["11111", "10000", "10000", "11111"],
   "7": ["11111", "00001", "00001", "00001"],
   "8": ["11111", "11111", "11111", "11111"],
-  "9": ["11111", "10001", "11111", "00001"],
+  "9": ["11111", "10001", "00001", "11111"],
   ".": ["00000", "00000", "00000", "00100"],
 };
 
-// 5-row full-block glyphs for the tallest TPS size.
-const LIVE_TPS_GLYPHS_5: Readonly<Record<string, readonly string[]>> = {
-  "0": ["███", "█ █", "█ █", "█ █", "███"],
-  "1": [" █ ", "██ ", " █ ", " █ ", "███"],
-  "2": ["███", "  █", "███", "█  ", "███"],
-  "3": ["███", "  █", "███", "  █", "███"],
-  "4": ["█ █", "█ █", "███", "  █", "  █"],
-  "5": ["███", "█  ", "███", "  █", "███"],
-  "6": ["███", "█  ", "███", "█ █", "███"],
-  "7": ["███", "  █", "  █", "  █", "  █"],
-  "8": ["███", "█ █", "███", "█ █", "███"],
-  "9": ["███", "█ █", "███", "  █", "███"],
-  ".": ["   ", "   ", "   ", "   ", " █ "],
-};
-
-function glyphRow(character: string, row: number): string {
-  const glyph = LIVE_TPS_GLYPHS[character];
-  if (glyph === undefined) return "   ";
-  let result = "";
-  for (let column = 0; column < 3; column += 1) {
-    const top = glyph[row * 2]?.[column] === "1";
-    const bottom = glyph[row * 2 + 1]?.[column] === "1";
-    result += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
-  }
-  return result;
+function stretchGlyph(rows: readonly string[]): readonly string[] {
+  return [rows[0]!, rows[1]!, rows[2]!, rows[3]!, rows[3]!, rows[4]!];
 }
 
-function glyphRow2(character: string, row: number): string {
-  const glyph = LIVE_TPS_GLYPHS_2[character];
+function mapGlyphs(
+  transform: (rows: readonly string[]) => readonly string[],
+): Readonly<Record<string, readonly string[]>> {
+  return Object.fromEntries(
+    Object.entries(LIVE_TPS_GLYPHS_5).map(([character, rows]) => [character, transform(rows)]),
+  );
+}
+
+const LIVE_TPS_GLYPHS_3 = mapGlyphs(stretchGlyph);
+
+function halfBlockRow(
+  glyphs: Readonly<Record<string, readonly string[]>>,
+  character: string,
+  row: number,
+): string {
+  const glyph = glyphs[character];
   if (glyph === undefined) return "     ";
   let result = "";
   for (let column = 0; column < 5; column += 1) {
@@ -463,6 +454,12 @@ function glyphRow2(character: string, row: number): string {
     result += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
   }
   return result;
+}
+
+function fullBlockRow(character: string, row: number): string {
+  const glyph = LIVE_TPS_GLYPHS_5[character];
+  if (glyph === undefined) return "     ";
+  return [...(glyph[row] ?? "00000")].map((cell) => (cell === "1" ? "█" : " ")).join("");
 }
 
 function centerText(value: string, width: number): string {
@@ -488,9 +485,9 @@ function blockMeter(
   const digitRows = Array.from({ length: rows }, (_, row) =>
     [...value]
       .map((character) => {
-        if (rows === 2) return glyphRow2(character, row);
-        if (rows === 3) return glyphRow(character, row);
-        return LIVE_TPS_GLYPHS_5[character]?.[row] ?? "   ";
+        if (rows === 2) return halfBlockRow(LIVE_TPS_GLYPHS_2, character, row);
+        if (rows === 3) return halfBlockRow(LIVE_TPS_GLYPHS_3, character, row);
+        return fullBlockRow(character, row);
       })
       .join(" "),
   );
