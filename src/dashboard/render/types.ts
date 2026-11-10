@@ -178,7 +178,7 @@ export interface DashboardSettingsView {
   readonly showProjectsTable?: boolean;
   /** Show the live aggregate TPS banner. Undefined (legacy) means shown. */
   readonly showLiveTps?: boolean;
-  /** Live TPS banner height in rows: 1, 2, 3, or 5. Undefined (legacy) means 3. */
+  /** Live TPS banner height in rows: 1, 3, or 5. Undefined (legacy) means 3. */
   readonly liveTpsSize?: LiveTpsSize;
   /** Four or six visible top cards. Undefined (legacy) means hour/day/week/month. */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
@@ -203,18 +203,18 @@ export interface LiveTpsView {
 }
 
 /** Vertical sizes offered for the live TPS banner. */
-export const LIVE_TPS_SIZES = [1, 2, 3, 5] as const;
+export const LIVE_TPS_SIZES = [1, 3, 5] as const;
 export type LiveTpsSize = (typeof LIVE_TPS_SIZES)[number];
 
 export function isLiveTpsSize(value: unknown): value is LiveTpsSize {
-  return value === 1 || value === 2 || value === 3 || value === 5;
+  return value === 1 || value === 3 || value === 5;
 }
 
 export function normalizeLiveTpsSize(value: unknown): LiveTpsSize {
   return isLiveTpsSize(value) ? value : 3;
 }
 
-/** Cycle 1 -> 2 -> 3 -> 5 -> 1. */
+/** Cycle 1 -> 3 -> 5 -> 1. */
 export function nextLiveTpsSize(value: LiveTpsSize): LiveTpsSize {
   const index = LIVE_TPS_SIZES.indexOf(value);
   return LIVE_TPS_SIZES[(index + 1) % LIVE_TPS_SIZES.length]!;

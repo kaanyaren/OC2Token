@@ -303,9 +303,10 @@ test("live TPS banner sits under the cards and falls back when narrow", () => {
   assert.equal(allLines[trendLine(wide) - 1]?.trim(), "");
 });
 
-test("live TPS size setting reserves 1, 2, 3, or 5 rows", () => {
+test("live TPS size setting reserves 1, 3, or 5 rows", () => {
   assert.equal(normalizeSettings({}).liveTpsSize, 3);
   assert.equal(normalizeSettings({ liveTpsSize: 1 }).liveTpsSize, 1);
+  assert.equal(normalizeSettings({ liveTpsSize: 2 }).liveTpsSize, 3);
   assert.equal(normalizeSettings({ liveTpsSize: 4 }).liveTpsSize, 3);
   assert.equal(normalizeSettings({ liveTpsSize: 5 }).liveTpsSize, 5);
 
@@ -314,20 +315,11 @@ test("live TPS size setting reserves 1, 2, 3, or 5 rows", () => {
     { available: true, tps: 0, activeSessions: 0 },
     { available: false, tps: 0, activeSessions: 0 },
   ];
-  for (const size of [1, 2, 3, 5] as const) {
+  for (const size of [1, 3, 5] as const) {
     for (const state of states) {
       assert.equal(renderLiveTps(state, false, 100, size).length, size);
     }
   }
-  assert.match(renderLiveTps(states[0]!, false, 100, 2).join("\n"), /EST\. LIVE TPS/);
-  const twoLine = renderLiveTps(states[0]!, false, 100, 2);
-  assert.equal(twoLine.length, 2);
-  assert.equal(twoLine.filter((line) => /[█▀▄]/.test(line)).length, 2);
-  assert.match(twoLine[1]!, /EST\. LIVE TPS · 2 ACTIVE/);
-  const digitRows = Array.from({ length: 10 }, (_, digit) =>
-    renderLiveTps({ available: true, tps: 10 + digit, activeSessions: 1 }, false, 100, 2).join("\n"),
-  );
-  assert.equal(new Set(digitRows).size, 10);
 });
 
 test("live TPS color adapts to the 10-minute average", () => {
