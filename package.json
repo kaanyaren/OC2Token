@@ -1,6 +1,6 @@
 {
   "name": "oc2token",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "description": "A macOS-first token usage dashboard CLI for OpenCode 2, Codex, Antigravity, Pi, and DeepSeek Harness",
   "type": "module",
   "bin": {
