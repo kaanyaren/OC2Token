@@ -409,21 +409,21 @@ const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
 };
 
 // 5-row full-block glyphs for the tallest TPS size.
-// 4-row bitmaps compressed into 2 terminal rows for the compact TPS size.
-// The second terminal row carries the lower half, so the digits read as a
-// complete compact face instead of the top two rows of the 3-row font.
+// 4-row, 5-column bitmaps compressed into 2 terminal rows for the compact
+// TPS size. The wider face keeps the digits distinct instead of reading like
+// a cropped 3-row font.
 const LIVE_TPS_GLYPHS_2: Readonly<Record<string, readonly string[]>> = {
-  "0": ["111", "101", "101", "111"],
-  "1": ["010", "010", "010", "010"],
-  "2": ["111", "001", "100", "111"],
-  "3": ["111", "001", "101", "111"],
-  "4": ["101", "101", "101", "111"],
-  "5": ["111", "100", "111", "001"],
-  "6": ["111", "100", "101", "111"],
-  "7": ["111", "001", "001", "001"],
-  "8": ["111", "111", "111", "111"],
-  "9": ["111", "101", "111", "001"],
-  ".": ["000", "000", "000", "010"],
+  "0": ["11111", "10001", "10001", "11111"],
+  "1": ["00100", "00100", "00100", "00100"],
+  "2": ["11111", "00001", "11111", "10000"],
+  "3": ["11111", "00001", "11111", "00001"],
+  "4": ["10001", "10001", "11111", "00001"],
+  "5": ["11111", "10000", "11111", "00001"],
+  "6": ["11111", "10000", "11111", "10001"],
+  "7": ["11111", "00001", "00001", "00001"],
+  "8": ["11111", "11111", "11111", "11111"],
+  "9": ["11111", "10001", "11111", "00001"],
+  ".": ["00000", "00000", "00000", "00100"],
 };
 
 // 5-row full-block glyphs for the tallest TPS size.
@@ -455,9 +455,9 @@ function glyphRow(character: string, row: number): string {
 
 function glyphRow2(character: string, row: number): string {
   const glyph = LIVE_TPS_GLYPHS_2[character];
-  if (glyph === undefined) return "   ";
+  if (glyph === undefined) return "     ";
   let result = "";
-  for (let column = 0; column < 3; column += 1) {
+  for (let column = 0; column < 5; column += 1) {
     const top = glyph[row * 2]?.[column] === "1";
     const bottom = glyph[row * 2 + 1]?.[column] === "1";
     result += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
