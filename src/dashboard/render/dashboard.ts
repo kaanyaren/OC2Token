@@ -405,7 +405,6 @@ const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
   "8": ["111", "101", "111", "101", "101", "111"],
   "9": ["111", "101", "111", "001", "001", "111"],
   ".": ["000", "000", "000", "000", "000", "010"],
-  "+": ["000", "010", "111", "010", "000", "000"],
 };
 
 function glyphRow(character: string, row: number): string {
@@ -436,7 +435,7 @@ export function renderLiveTps(live: LiveTpsView, color: boolean, width: number):
   const safeWidth = Math.max(1, width);
   const active = live.available !== false && Number.isFinite(live.tps) && live.tps > 0;
   const tps = active ? live.tps : 0;
-  const value = active ? (tps >= 1000 ? "999+" : tps.toFixed(1)) : "0.0";
+  const value = active ? tps.toFixed(1) : "0.0";
   const label = live.available === false
     ? "EST. LIVE TPS · n/a"
     : active

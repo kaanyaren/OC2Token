@@ -261,6 +261,16 @@ test("live TPS banner sits under the cards and falls back when narrow", () => {
   assert.match(narrow, /EST\. LIVE TPS 42\.3 · 2 ACTIVE/);
   assert.ok(narrow.split("\n").every((line) => [...line].length <= 40));
 
+  const overThousand = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 40,
+    now: NOW,
+    liveTps: { available: true, tps: 1234.5, activeSessions: 1 },
+  });
+  assert.match(overThousand, /EST\. LIVE TPS 1234\.5 · 1 ACTIVE/);
+  assert.doesNotMatch(overThousand, /999\+/);
+
   const absentService = renderDashboard(fixture(), {
     isTTY: true,
     color: false,
