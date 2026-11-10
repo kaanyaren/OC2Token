@@ -537,11 +537,25 @@ export function renderLiveTps(live: LiveTpsView, color: boolean, width: number, 
   return padRows([centerText(paint(compact, rateColor, color), safeWidth)], size);
 }
 
+function graphTimeLabel(date: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
 function renderTrend(
   snapshot: ReturnType<typeof normalizeDashboardSnapshot>,
   selected: DashboardCardKind,
   color: boolean,
   width: number,
+  now: Date,
 ): string[] {
   let trend = cardWindow(snapshot, selected).trends;
   const title = `Trend · ${cardTitle(selected).toLowerCase()}`;
@@ -551,10 +565,21 @@ function renderTrend(
   if (max === 0) return [panelHeading(title, width, color), truncate("  No trend data recorded.", width)];
 
   // The day graph starts at the first token use, not midnight, so sleep time
-  // does not consume the left half of the chart.
+  // does not consume the left half of the chart. It ends at the current time.
   if (selected === "day") {
     const firstUsage = trend.findIndex((bucket) => bucket.totals.recorded_total > 0);
     if (firstUsage > 0) trend = trend.slice(firstUsage);
+    const cut = trend.filter((bucket) => {
+      if (bucket.from === undefined) return true;
+      const from = new Date(bucket.from).getTime();
+      return !Number.isFinite(from) || from <= now.getTime();
+    });
+    if (cut.length > 0) trend = cut;
+    const last = trend.at(-1);
+    if (last !== undefined) {
+      const timezone = snapshot.windows.day.window.timezone;
+      trend = [...trend.slice(0, -1), { ...last, label: graphTimeLabel(now, timezone) }];
+    }
   }
 
   const levels = 5;
@@ -1325,6 +1350,8 @@ export function renderDashboard(
   const width = Math.max(1, terminalWidth - APP_PADDING * 2);
   const color = colorEnabled(options);
   const selected = options.selectedWindow ?? "day";
+  const requestedNow = options.now === undefined ? snapshot.windows.hour.window.to : new Date(options.now);
+  const now = Number.isNaN(requestedNow.getTime()) ? snapshot.windows.hour.window.to : requestedNow;
   const visibleCards = normalizeVisibleCards(options.visibleCards);
   const lines = renderHeader(color, width);
   const grid = cardGridColumns(width, visibleCards.length);
@@ -1351,7 +1378,7 @@ export function renderDashboard(
   }
 
   lines.push("");
-  lines.push(...renderTrend(snapshot, selected, color, width));
+  lines.push(...renderTrend(snapshot, selected, color, width, now));
   lines.push("");
   const selectedData = cardWindow(snapshot, selected);
   const breakdownWidths = breakdownColumnWidths([

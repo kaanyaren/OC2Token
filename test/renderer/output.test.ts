@@ -490,6 +490,8 @@ test("trend panel renders a graph rather than one textual row per bucket", () =>
 test("today graph starts at the first usage bucket", () => {
   const trends = Array.from({ length: 12 }, (_, index) => ({
     label: `${String(index).padStart(2, "0")}:00`,
+    from: new Date(Date.UTC(2026, 8, 1, 21 + index)),
+    to: new Date(Date.UTC(2026, 8, 1, 22 + index)),
     totals: toUsageTotals({
       input: index < 4 ? 0 : 10,
       output: 0,
@@ -510,7 +512,9 @@ test("today graph starts at the first usage bucket", () => {
   assert.ok(start >= 0 && end > start);
   const panel = output.slice(start, end);
   assert.match(panel, /04:00/);
+  assert.match(panel, /13:00/);
   assert.doesNotMatch(panel, /00:00/);
+  assert.doesNotMatch(panel, /11:00/);
 });
 
 test("stats snapshots use persisted trend buckets when records are empty", () => {
