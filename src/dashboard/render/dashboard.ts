@@ -410,16 +410,18 @@ const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
 
 // 5-row full-block glyphs for the tallest TPS size.
 // 4-row bitmaps compressed into 2 terminal rows for the compact TPS size.
+// The second terminal row carries the lower half, so the digits read as a
+// complete compact face instead of the top two rows of the 3-row font.
 const LIVE_TPS_GLYPHS_2: Readonly<Record<string, readonly string[]>> = {
   "0": ["111", "101", "101", "111"],
-  "1": ["010", "110", "010", "111"],
-  "2": ["111", "001", "110", "111"],
-  "3": ["111", "001", "111", "001"],
-  "4": ["101", "101", "111", "001"],
+  "1": ["010", "010", "010", "010"],
+  "2": ["111", "001", "100", "111"],
+  "3": ["111", "001", "101", "111"],
+  "4": ["101", "101", "101", "111"],
   "5": ["111", "100", "111", "001"],
-  "6": ["111", "100", "111", "101"],
+  "6": ["111", "100", "101", "111"],
   "7": ["111", "001", "001", "001"],
-  "8": ["111", "101", "111", "101"],
+  "8": ["111", "111", "111", "111"],
   "9": ["111", "101", "111", "001"],
   ".": ["000", "000", "000", "010"],
 };
