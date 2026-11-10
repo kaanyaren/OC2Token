@@ -48,6 +48,7 @@ import {
   type DashboardRenderOptions,
   type DashboardSnapshotInput,
   type DashboardWindow,
+  type LiveTpsView,
 } from "./types.js";
 import { ALL_PROVIDER_KINDS, SETTINGS_ROWS } from "../settings/index.js";
 import { resolveAppVersion } from "../../version.js";
@@ -388,6 +389,69 @@ export function cardWindow(
   kind: DashboardCardKind,
 ): DashboardWindow {
   return isDerivedCardKind(kind) ? snapshot.derived[kind] : snapshot.windows[kind];
+}
+
+// 3-wide, 5-row block glyphs for the live TPS banner.
+const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
+  "0": ["███", "█ █", "█ █", "█ █", "███"],
+  "1": [" █ ", "██ ", " █ ", " █ ", "███"],
+  "2": ["███", "  █", "███", "█  ", "███"],
+  "3": ["███", "  █", "███", "  █", "███"],
+  "4": ["█ █", "█ █", "███", "  █", "  █"],
+  "5": ["███", "█  ", "███", "  █", "███"],
+  "6": ["███", "█  ", "███", "█ █", "███"],
+  "7": ["███", "  █", "  █", "  █", "  █"],
+  "8": ["███", "█ █", "███", "█ █", "███"],
+  "9": ["███", "█ █", "███", "  █", "███"],
+  ".": ["   ", "   ", "   ", "   ", " █ "],
+  "+": ["   ", " █ ", "███", " █ ", "   "],
+};
+
+function centerText(value: string, width: number): string {
+  const visible = lineWidth(value);
+  if (visible >= width) return truncateVisible(value, width);
+  return " ".repeat(Math.floor((width - visible) / 2)) + value;
+}
+
+/**
+ * Aggregate live TPS banner shown between the cards and the trend panel.
+ * Falls back to one line when the block digits do not comfortably fit or the
+ * terminal is too short for a five-row banner.
+ */
+export function renderLiveTps(
+  live: LiveTpsView,
+  color: boolean,
+  width: number,
+  height?: number,
+): string[] {
+  const safeWidth = Math.max(1, width);
+  if (live.available === false) {
+    return [centerText(paint("EST. LIVE TPS · n/a", ANSI.dim, color), safeWidth)];
+  }
+  const tps = Number.isFinite(live.tps) ? Math.max(0, live.tps) : 0;
+  if (tps <= 0) {
+    return [centerText(paint("EST. LIVE TPS · idle", ANSI.dim, color), safeWidth)];
+  }
+
+  const value = tps >= 1000 ? "999+" : tps.toFixed(1);
+  const rateColor = tps > 50 ? ANSI.green : tps >= 10 ? ANSI.orange : ANSI.red;
+  const rate = (text: string): string => paint(text, rateColor, color);
+  const caption = `EST. LIVE TPS · ${live.activeSessions} ACTIVE`;
+  const blockWidth = value.length * 4 - 1;
+  // 40 columns is the minimum that reads well; narrower terminals get the
+  // compact line so the banner never crowds the dashboard.
+  if (blockWidth > safeWidth || safeWidth < 40 || (height !== undefined && height < 30)) {
+    return [centerText(rate(`EST. LIVE TPS ${value} · ${live.activeSessions} ACTIVE`), safeWidth)];
+  }
+
+  const rows = Array.from({ length: 5 }, (_, row) =>
+    centerText(
+      rate([...value].map((character) => LIVE_TPS_GLYPHS[character]?.[row] ?? "   ").join(" ")),
+      safeWidth,
+    ),
+  );
+  rows.push(centerText(themePurple(caption, color), safeWidth));
+  return rows;
 }
 
 function renderTrend(
@@ -1177,6 +1241,10 @@ export function renderDashboard(
     }
   } else {
     for (const card of cards) lines.push(...card);
+  }
+
+  if (options.liveTps !== undefined) {
+    lines.push(...renderLiveTps(options.liveTps, color, width, options.height));
   }
 
   lines.push("");

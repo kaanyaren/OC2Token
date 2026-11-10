@@ -36,7 +36,7 @@ import {
   type ProviderKind,
   type UsageWindowKind,
 } from "./domain/index.js";
-import { runOpenCodeDoctor } from "./opencode/index.js";
+import { createLiveTpsMeter, runOpenCodeDoctor } from "./opencode/index.js";
 import { runCodexDoctor } from "./codex/doctor.js";
 import { runAntigravityDoctor } from "./antigravity/doctor.js";
 import { runPiDoctor } from "./pi/doctor.js";
@@ -474,6 +474,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     monotonicNow: () => Number(process.hrtime.bigint()) / 1_000_000,
   };
   const fallback = emptyCollectionResult(clock.wallNow(), options.timezone);
+  const liveTps = createLiveTpsMeter();
+  liveTps.start();
   const coordinator = new RefreshCoordinator({
     source: adapterSource.source,
     clock,
@@ -637,6 +639,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       selectedWindow: selectedCard,
       help,
       appVersion: VERSION,
+      liveTps: liveTps.snapshot(),
       // Always pass table visibility so hidden tables stay hidden when the
       // panel is closed; the panel itself only renders when visible.
       settings: {
@@ -661,6 +664,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
   const stop = async () => {
     if (!running) return;
     running = false;
+    liveTps.stop();
     await coordinator.quit();
     if (io.stdin.isTTY) io.stdin.setRawMode?.(false);
     io.stdin.pause();
@@ -1324,20 +1328,25 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     }
   };
   io.stdin.on("data", onInput);
-  // Heartbeat is gated, not a blind 1s redraw: it fires only on clock
-  // rollover (countdown text changes each second) or while a refresh is in
-  // flight (spinner/progress). Idle dashboards skip redraw to save CPU.
+  // Heartbeat is gated, not a blind redraw: it fires on clock rollover
+  // (countdown text changes each second), while a refresh is in flight
+  // (spinner/progress), or when the live TPS reading changes. Idle dashboards
+  // skip redraw to save CPU.
   let lastHeartbeatSecond = Math.floor(Number(process.hrtime.bigint()) / 1_000_000_000);
+  let lastTpsKey = "";
   const heartbeat = setInterval(() => {
     if (!running) return;
     const state = coordinator.getState();
     const second = Math.floor(clock.monotonicNow() / 1000);
+    const live = liveTps.snapshot();
+    const tpsKey = `${live.available}:${live.activeSessions}:${live.tps.toFixed(1)}`;
     const active = state.status === "refreshing";
-    if (active || second !== lastHeartbeatSecond) {
+    if (active || second !== lastHeartbeatSecond || tpsKey !== lastTpsKey) {
       lastHeartbeatSecond = second;
+      lastTpsKey = tpsKey;
       draw();
     }
-  }, 1_000);
+  }, 250);
   if (typeof heartbeat === "object" && heartbeat !== null && "unref" in heartbeat) {
     (heartbeat as unknown as { unref(): void }).unref();
   }

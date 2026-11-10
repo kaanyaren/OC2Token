@@ -190,6 +190,12 @@ export interface DashboardProjectsView {
   readonly visible: boolean;
 }
 
+export interface LiveTpsView {
+  readonly available: boolean;
+  readonly tps: number;
+  readonly activeSessions: number;
+}
+
 export interface DashboardRenderOptions {
   readonly ansi?: boolean;
   readonly isTTY?: boolean;
@@ -217,6 +223,8 @@ export interface DashboardRenderOptions {
   };
   /** Which breakdown table has keyboard focus (when settings panel is closed). */
   readonly focusedTable?: "models" | "providers" | "projects";
+  /** Live aggregate TPS from all open OpenCode2 sessions. Dashboard-only. */
+  readonly liveTps?: LiveTpsView;
   /**
    * App version shown in the bottom credit bar (e.g. "0.1.13", rendered as
    * "v0.1.13"). Optional — the renderer falls back to the shared package.json

@@ -219,6 +219,51 @@ test("very narrow dashboard truncates every line instead of relying on wrapping"
   }
 });
 
+test("live TPS banner sits under the cards and falls back when narrow", () => {
+  const live = { available: true, tps: 42.3, activeSessions: 2 };
+  const wide = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    now: NOW,
+    liveTps: live,
+  });
+  assert.match(wide, /EST\. LIVE TPS · 2 ACTIVE/);
+  assert.match(wide, /█/);
+  assert.ok(wide.indexOf("EST. LIVE TPS") < wide.indexOf("Trend ·"));
+
+  const absent = renderDashboard(fixture(), { isTTY: true, color: false, width: 100, now: NOW });
+  assert.doesNotMatch(absent, /EST\. LIVE TPS/);
+
+  const narrow = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 40,
+    now: NOW,
+    liveTps: live,
+  });
+  assert.match(narrow, /EST\. LIVE TPS 42\.3 · 2 ACTIVE/);
+  assert.ok(narrow.split("\n").every((line) => [...line].length <= 40));
+
+  const absentService = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    now: NOW,
+    liveTps: { available: false, tps: 0, activeSessions: 0 },
+  });
+  assert.match(absentService, /EST\. LIVE TPS · n\/a/);
+
+  const idle = renderDashboard(fixture(), {
+    isTTY: true,
+    color: false,
+    width: 100,
+    now: NOW,
+    liveTps: { available: true, tps: 0, activeSessions: 0 },
+  });
+  assert.match(idle, /EST\. LIVE TPS · idle/);
+});
+
 test("month card stays within responsive dashboard widths", () => {
   for (const width of [60, 90, 100, 113, 114]) {
     const output = renderDashboard(fixture(), { isTTY: true, color: false, width, now: NOW });
