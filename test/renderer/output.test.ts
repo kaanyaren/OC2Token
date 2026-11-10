@@ -278,6 +278,14 @@ test("live TPS banner sits under the cards and falls back when narrow", () => {
     liveTps: { available: true, tps: 0, activeSessions: 0 },
   });
   assert.match(idle, /EST\. LIVE TPS · idle/);
+
+  // Active, idle, and unavailable reserve the same three rows, so the trend
+  // and every table below stay at the same row.
+  const trendLine = (output: string): number => output.split("\n").findIndex((line) => line.includes("Trend ·"));
+  assert.equal(trendLine(wide), trendLine(idle));
+  assert.equal(trendLine(wide), trendLine(absentService));
+  const aboveTrend = wide.split("\n").slice(0, trendLine(wide));
+  assert.equal(aboveTrend.filter((line) => /[█▀▄]/.test(line)).length, 3);
 });
 
 test("month card stays within responsive dashboard widths", () => {

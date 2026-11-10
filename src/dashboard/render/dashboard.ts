@@ -391,21 +391,34 @@ export function cardWindow(
   return isDerivedCardKind(kind) ? snapshot.derived[kind] : snapshot.windows[kind];
 }
 
-// 3-wide, 5-row block glyphs for the live TPS banner.
+// 6-row bitmaps compressed into 3 terminal rows with half-block glyphs.
+// Each bitmap row is 3 columns; pairs of rows become ▀ / ▄ / █ / space.
 const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
-  "0": ["███", "█ █", "█ █", "█ █", "███"],
-  "1": [" █ ", "██ ", " █ ", " █ ", "███"],
-  "2": ["███", "  █", "███", "█  ", "███"],
-  "3": ["███", "  █", "███", "  █", "███"],
-  "4": ["█ █", "█ █", "███", "  █", "  █"],
-  "5": ["███", "█  ", "███", "  █", "███"],
-  "6": ["███", "█  ", "███", "█ █", "███"],
-  "7": ["███", "  █", "  █", "  █", "  █"],
-  "8": ["███", "█ █", "███", "█ █", "███"],
-  "9": ["███", "█ █", "███", "  █", "███"],
-  ".": ["   ", "   ", "   ", "   ", " █ "],
-  "+": ["   ", " █ ", "███", " █ ", "   "],
+  "0": ["111", "101", "101", "101", "101", "111"],
+  "1": ["010", "110", "010", "010", "010", "111"],
+  "2": ["111", "001", "111", "100", "100", "111"],
+  "3": ["111", "001", "111", "001", "001", "111"],
+  "4": ["101", "101", "111", "001", "001", "001"],
+  "5": ["111", "100", "111", "001", "001", "111"],
+  "6": ["111", "100", "111", "101", "101", "111"],
+  "7": ["111", "001", "001", "001", "001", "001"],
+  "8": ["111", "101", "111", "101", "101", "111"],
+  "9": ["111", "101", "111", "001", "001", "111"],
+  ".": ["000", "000", "000", "000", "000", "010"],
+  "+": ["000", "010", "111", "010", "000", "000"],
 };
+
+function glyphRow(character: string, row: number): string {
+  const glyph = LIVE_TPS_GLYPHS[character];
+  if (glyph === undefined) return "   ";
+  let result = "";
+  for (let column = 0; column < 3; column += 1) {
+    const top = glyph[row * 2]?.[column] === "1";
+    const bottom = glyph[row * 2 + 1]?.[column] === "1";
+    result += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
+  }
+  return result;
+}
 
 function centerText(value: string, width: number): string {
   const visible = lineWidth(value);
@@ -415,43 +428,45 @@ function centerText(value: string, width: number): string {
 
 /**
  * Aggregate live TPS banner shown between the cards and the trend panel.
- * Falls back to one line when the block digits do not comfortably fit or the
- * terminal is too short for a five-row banner.
+ * It always reserves exactly three rows: active, idle, and unavailable all
+ * render the same height, so content below never jumps. Narrow terminals get
+ * a one-line fallback instead of block digits.
  */
-export function renderLiveTps(
-  live: LiveTpsView,
-  color: boolean,
-  width: number,
-  height?: number,
-): string[] {
+export function renderLiveTps(live: LiveTpsView, color: boolean, width: number): string[] {
   const safeWidth = Math.max(1, width);
-  if (live.available === false) {
-    return [centerText(paint("EST. LIVE TPS · n/a", ANSI.dim, color), safeWidth)];
-  }
-  const tps = Number.isFinite(live.tps) ? Math.max(0, live.tps) : 0;
-  if (tps <= 0) {
-    return [centerText(paint("EST. LIVE TPS · idle", ANSI.dim, color), safeWidth)];
-  }
-
-  const value = tps >= 1000 ? "999+" : tps.toFixed(1);
-  const rateColor = tps > 50 ? ANSI.green : tps >= 10 ? ANSI.orange : ANSI.red;
-  const rate = (text: string): string => paint(text, rateColor, color);
-  const caption = `EST. LIVE TPS · ${live.activeSessions} ACTIVE`;
-  const blockWidth = value.length * 4 - 1;
+  const active = live.available !== false && Number.isFinite(live.tps) && live.tps > 0;
+  const tps = active ? live.tps : 0;
+  const value = active ? (tps >= 1000 ? "999+" : tps.toFixed(1)) : "0.0";
+  const label = live.available === false
+    ? "EST. LIVE TPS · n/a"
+    : active
+      ? `EST. LIVE TPS · ${live.activeSessions} ACTIVE`
+      : "EST. LIVE TPS · idle";
+  const rateColor = active
+    ? tps > 50 ? ANSI.green : tps >= 10 ? ANSI.orange : ANSI.red
+    : ANSI.purpleDim;
+  const digitRows = Array.from({ length: 3 }, (_, row) =>
+    [...value].map((character) => glyphRow(character, row)).join(" "),
+  );
+  const blockWidth = lineWidth(digitRows[0]!);
+  const combinedWidth = blockWidth + 2 + [...label].length;
   // 40 columns is the minimum that reads well; narrower terminals get the
   // compact line so the banner never crowds the dashboard.
-  if (blockWidth > safeWidth || safeWidth < 40 || (height !== undefined && height < 30)) {
-    return [centerText(rate(`EST. LIVE TPS ${value} · ${live.activeSessions} ACTIVE`), safeWidth)];
+  if (combinedWidth > safeWidth || safeWidth < 40) {
+    const fallback = active
+      ? `EST. LIVE TPS ${value} · ${live.activeSessions} ACTIVE`
+      : `EST. LIVE TPS 0.0 · ${live.available === false ? "n/a" : "idle"}`;
+    return [centerText(paint(fallback, rateColor, color), safeWidth)];
   }
 
-  const rows = Array.from({ length: 5 }, (_, row) =>
-    centerText(
-      rate([...value].map((character) => LIVE_TPS_GLYPHS[character]?.[row] ?? "   ").join(" ")),
-      safeWidth,
-    ),
-  );
-  rows.push(centerText(themePurple(caption, color), safeWidth));
-  return rows;
+  const labelColored = active ? themePurple(label, color) : paint(label, ANSI.purpleDim, color);
+  const leftPad = Math.max(0, Math.floor((safeWidth - combinedWidth) / 2));
+  const prefix = " ".repeat(leftPad);
+  return [
+    prefix + paint(digitRows[0]!, rateColor, color),
+    prefix + paint(digitRows[1]!, rateColor, color) + "  " + labelColored,
+    prefix + paint(digitRows[2]!, rateColor, color),
+  ];
 }
 
 function renderTrend(
@@ -1245,7 +1260,7 @@ export function renderDashboard(
   }
 
   if (options.liveTps !== undefined && options.settings?.showLiveTps !== false) {
-    lines.push(...renderLiveTps(options.liveTps, color, width, options.height));
+    lines.push(...renderLiveTps(options.liveTps, color, width));
   }
 
   lines.push("");
