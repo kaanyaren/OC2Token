@@ -409,6 +409,21 @@ const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
 };
 
 // 5-row full-block glyphs for the tallest TPS size.
+// 4-row bitmaps compressed into 2 terminal rows for the compact TPS size.
+const LIVE_TPS_GLYPHS_2: Readonly<Record<string, readonly string[]>> = {
+  "0": ["111", "101", "101", "111"],
+  "1": ["010", "110", "010", "111"],
+  "2": ["111", "001", "110", "111"],
+  "3": ["111", "001", "111", "001"],
+  "4": ["101", "101", "111", "001"],
+  "5": ["111", "100", "111", "001"],
+  "6": ["111", "100", "111", "101"],
+  "7": ["111", "001", "001", "001"],
+  "8": ["111", "101", "111", "101"],
+  "9": ["111", "101", "111", "001"],
+  ".": ["000", "000", "000", "010"],
+};
+
 // 5-row full-block glyphs for the tallest TPS size.
 const LIVE_TPS_GLYPHS_5: Readonly<Record<string, readonly string[]>> = {
   "0": ["███", "█ █", "█ █", "█ █", "███"],
@@ -436,6 +451,18 @@ function glyphRow(character: string, row: number): string {
   return result;
 }
 
+function glyphRow2(character: string, row: number): string {
+  const glyph = LIVE_TPS_GLYPHS_2[character];
+  if (glyph === undefined) return "   ";
+  let result = "";
+  for (let column = 0; column < 3; column += 1) {
+    const top = glyph[row * 2]?.[column] === "1";
+    const bottom = glyph[row * 2 + 1]?.[column] === "1";
+    result += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
+  }
+  return result;
+}
+
 function centerText(value: string, width: number): string {
   const visible = lineWidth(value);
   if (visible >= width) return truncateVisible(value, width);
@@ -450,7 +477,7 @@ function padRows(rows: ReadonlyArray<string>, count: number): string[] {
 function blockMeter(
   value: string,
   label: string,
-  rows: 3 | 5,
+  rows: 2 | 3 | 5,
   color: boolean,
   width: number,
   rateColor: string,
@@ -458,7 +485,11 @@ function blockMeter(
 ): string[] | undefined {
   const digitRows = Array.from({ length: rows }, (_, row) =>
     [...value]
-      .map((character) => (rows === 3 ? glyphRow(character, row) : (LIVE_TPS_GLYPHS_5[character]?.[row] ?? "   ")))
+      .map((character) => {
+        if (rows === 2) return glyphRow2(character, row);
+        if (rows === 3) return glyphRow(character, row);
+        return LIVE_TPS_GLYPHS_5[character]?.[row] ?? "   ";
+      })
       .join(" "),
   );
   const combinedWidth = lineWidth(digitRows[0]!) + 2 + [...label].length;
@@ -501,18 +532,6 @@ export function renderLiveTps(live: LiveTpsView, color: boolean, width: number, 
   const compact = active ? `EST. LIVE TPS ${value} · ${live.activeSessions} ACTIVE` : `EST. LIVE TPS 0.0 · ${state}`;
 
   if (size === 1) return [centerText(paint(compact, rateColor, color), safeWidth)];
-  if (size === 2) {
-    return [
-      centerText(
-        active ? themePurple("EST. LIVE TPS", color) : paint("EST. LIVE TPS", ANSI.purpleDim, color),
-        safeWidth,
-      ),
-      centerText(
-        paint(active ? `${value} · ${live.activeSessions} ACTIVE` : `0.0 · ${state}`, rateColor, color),
-        safeWidth,
-      ),
-    ];
-  }
 
   const block = blockMeter(value, label, size, color, safeWidth, rateColor, active);
   if (block !== undefined) return block;
