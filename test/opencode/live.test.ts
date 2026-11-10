@@ -70,6 +70,16 @@ test("session.idle removes the session", () => {
   assert.deepEqual(aggregator.snapshot(NOW), { tps: 0, activeSessions: 0 });
 });
 
+test("tracks a 10-minute average and prunes older buckets", () => {
+  const aggregator = new TpsAggregator();
+  aggregator.ingest(text("session-a", 40), NOW);
+  assert.equal(aggregator.averageTps(NOW), 10);
+
+  aggregator.ingest(text("session-a", 40), NOW + 10_000);
+  assert.equal(aggregator.averageTps(NOW + 10_000), 2);
+  assert.equal(aggregator.averageTps(NOW + 11 * 60_000), 0);
+});
+
 test("ignores malformed events", () => {
   const aggregator = new TpsAggregator();
 

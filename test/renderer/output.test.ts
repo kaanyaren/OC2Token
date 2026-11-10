@@ -15,6 +15,7 @@ import {
   normalizeVisibleCards,
   renderDashboard,
   renderInPlace,
+  renderLiveTps,
   renderOutput,
   themeOrange,
   themePurple,
@@ -296,6 +297,37 @@ test("live TPS banner sits under the cards and falls back when narrow", () => {
   assert.equal(trendLine(wide), trendLine(absentService));
   const aboveTrend = wide.split("\n").slice(0, trendLine(wide));
   assert.equal(aboveTrend.filter((line) => /[█▀▄]/.test(line)).length, 3);
+  const allLines = wide.split("\n");
+  const firstMeterLine = allLines.findIndex((line) => /[█▀▄]/.test(line));
+  assert.equal(allLines[firstMeterLine - 1]?.trim(), "");
+  assert.equal(allLines[trendLine(wide) - 1]?.trim(), "");
+});
+
+test("live TPS size setting reserves 1, 2, 3, or 5 rows", () => {
+  assert.equal(normalizeSettings({}).liveTpsSize, 3);
+  assert.equal(normalizeSettings({ liveTpsSize: 1 }).liveTpsSize, 1);
+  assert.equal(normalizeSettings({ liveTpsSize: 4 }).liveTpsSize, 3);
+  assert.equal(normalizeSettings({ liveTpsSize: 5 }).liveTpsSize, 5);
+
+  const states = [
+    { available: true, tps: 42.3, activeSessions: 2 },
+    { available: true, tps: 0, activeSessions: 0 },
+    { available: false, tps: 0, activeSessions: 0 },
+  ];
+  for (const size of [1, 2, 3, 5] as const) {
+    for (const state of states) {
+      assert.equal(renderLiveTps(state, false, 100, size).length, size);
+    }
+  }
+  assert.match(renderLiveTps(states[0]!, false, 100, 2).join("\n"), /EST\. LIVE TPS/);
+});
+
+test("live TPS color adapts to the 10-minute average", () => {
+  const meter = (tps: number) =>
+    renderLiveTps({ available: true, tps, activeSessions: 1, averageTps: 10 }, true, 100, 3).join("\n");
+  assert.match(meter(20), /\u001b\[32m/); // >= 125% of average
+  assert.match(meter(10), /\u001b\[38;5;208m/); // 75-125%
+  assert.match(meter(5), /\u001b\[31m/); // < 75%
 });
 
 test("month card stays within responsive dashboard widths", () => {
@@ -1196,6 +1228,7 @@ test("settings panel lists the four card slots", () => {
   assert.match(plain, /Card 6: Month/);
   assert.match(plain, /Cards shown: 4/);
   assert.match(plain, /◉ Live TPS/);
+  assert.match(plain, /TPS size: 3 lines/);
 });
 
 test("settings focus index order follows the rendered row order", () => {
@@ -1234,6 +1267,7 @@ test("settings focus index order follows the rendered row order", () => {
     "◉ Providers table",
     "◉ Projects table",
     "◉ Live TPS",
+    "TPS size: 3 lines",
     "Card 1: 15m",
     "Card 2: Hour",
     "Card 3: Today",

@@ -14,6 +14,8 @@ export interface LiveTpsReading {
 
 export interface LiveTpsSnapshot extends LiveTpsReading {
   readonly available: boolean;
+  /** Average TPS over the last 10 minutes of observed token flow. */
+  readonly averageTps: number;
 }
 
 export interface LiveTpsMeter {
@@ -27,6 +29,7 @@ export interface LiveTpsMeterOptions {
 }
 
 const WINDOW_MS = 1_000;
+const AVERAGE_WINDOW_MS = 10 * 60 * 1_000;
 const PRUNE_MS = 30_000;
 const CHARS_PER_TOKEN = 4;
 const MIN_FACTOR = 0.5;
@@ -67,9 +70,12 @@ function clamp(value: number, min: number, max: number): number {
 /** Heuristic live rate from streamed characters; exact counts only arrive per step. */
 export class TpsAggregator {
   private readonly sessions = new Map<string, SessionState>();
+  /** One-second token buckets for the adaptive 10-minute average. */
+  private readonly history = new Map<number, number>();
 
   reset(): void {
     this.sessions.clear();
+    this.history.clear();
   }
 
   ingest(event: LiveTpsEvent, now: number): void {
@@ -134,6 +140,7 @@ export class TpsAggregator {
   }
 
   snapshot(now: number): LiveTpsReading {
+    this.pruneHistory(now);
     const cutoff = now - WINDOW_MS;
     let tokens = 0;
     let activeSessions = 0;
@@ -148,6 +155,28 @@ export class TpsAggregator {
       if (now - session.lastSeen > PRUNE_MS) this.sessions.delete(sessionID);
     }
     return { tps: tokens / (WINDOW_MS / 1_000), activeSessions };
+  }
+
+  /** Average TPS over the last 10 minutes, or the observed span when shorter. */
+  averageTps(now: number): number {
+    this.pruneHistory(now);
+    if (this.history.size === 0) return 0;
+    let total = 0;
+    let firstSecond = Number.POSITIVE_INFINITY;
+    for (const [second, tokens] of this.history) {
+      total += tokens;
+      firstSecond = Math.min(firstSecond, second);
+    }
+    const from = Math.max(firstSecond * 1_000, now - AVERAGE_WINDOW_MS);
+    const elapsedMs = Math.max(1_000, now - from);
+    return total / (elapsedMs / 1_000);
+  }
+
+  private pruneHistory(now: number): void {
+    const cutoffSecond = Math.floor((now - AVERAGE_WINDOW_MS) / 1_000);
+    for (const second of this.history.keys()) {
+      if (second < cutoffSecond) this.history.delete(second);
+    }
   }
 
   private session(sessionID: string, now: number): SessionState {
@@ -170,8 +199,11 @@ export class TpsAggregator {
     if (chars <= 0) return;
     const session = this.session(sessionID, now);
     const rawTokens = chars / CHARS_PER_TOKEN;
+    const tokens = rawTokens * session.factor;
     session.stepTokens += rawTokens;
-    session.samples.push({ at: now, tokens: rawTokens * session.factor });
+    session.samples.push({ at: now, tokens });
+    const second = Math.floor(now / 1_000);
+    this.history.set(second, (this.history.get(second) ?? 0) + tokens);
   }
 }
 
@@ -259,7 +291,11 @@ export function createLiveTpsMeter(options: LiveTpsMeterOptions = {}): LiveTpsMe
       available = false;
     },
     snapshot(now = Date.now()): LiveTpsSnapshot {
-      return { available, ...aggregator.snapshot(now) };
+      return {
+        available,
+        ...aggregator.snapshot(now),
+        averageTps: aggregator.averageTps(now),
+      };
     },
   };
 }

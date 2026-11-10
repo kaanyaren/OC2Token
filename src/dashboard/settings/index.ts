@@ -7,8 +7,10 @@ import { isProviderKind } from "../../domain/records.js";
 import {
   DEFAULT_VISIBLE_CARDS,
   DEFAULT_WIDE_CARDS,
+  normalizeLiveTpsSize,
   normalizeVisibleCards,
   type DashboardCardKind,
+  type LiveTpsSize,
 } from "../render/types.js";
 
 export const SETTINGS_MIN_REFRESH_SECONDS = 15;
@@ -32,8 +34,8 @@ const LEGACY_ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
 
 /**
  * Settings focus rows, numbered in the order the panel *renders* them:
- * providers (0-4) -> display toggles (5-7) -> card slots (8-13) -> card count
- * (14) -> refresh interval (15).
+ * providers (0-4) -> display toggles (5-7) -> TPS size (8) -> card slots
+ * (9-14) -> card count (15) -> refresh interval (16).
  *
  * All six slot rows always render; slots at or past the visible count are
  * dimmed placeholders so the indices below never shift when toggling
@@ -45,10 +47,11 @@ const LEGACY_ALL_PROVIDER_KINDS: readonly ProviderKind[] = ["opencode", "codex",
 export const SETTINGS_ROWS = {
   providers: 0,
   tables: 5,
-  cards: 8,
-  cardCount: 14,
-  refresh: 15,
-  count: 16,
+  liveTpsSize: 8,
+  cards: 9,
+  cardCount: 15,
+  refresh: 16,
+  count: 17,
 } as const;
 
 export interface DashboardSettings {
@@ -60,6 +63,8 @@ export interface DashboardSettings {
   readonly showProjectsTable?: boolean;
   /** Show the live aggregate TPS banner (default true for legacy files). */
   readonly showLiveTps?: boolean;
+  /** Live TPS banner height in rows (default 3 for legacy files). */
+  readonly liveTpsSize?: LiveTpsSize;
   /** Four or six visible top cards (default hour/day/week/month for legacy files). */
   readonly visibleCards?: ReadonlyArray<DashboardCardKind>;
   /** Inactive card set of the opposite size (remembered across count toggles). */
@@ -159,6 +164,7 @@ export function normalizeSettings(value: unknown): DashboardSettings {
       showProvidersTable: true,
       showProjectsTable: true,
       showLiveTps: true,
+      liveTpsSize: 3,
       visibleCards: [...DEFAULT_VISIBLE_CARDS],
       inactiveCards: [...DEFAULT_WIDE_CARDS],
     };
@@ -180,6 +186,7 @@ export function normalizeSettings(value: unknown): DashboardSettings {
     showProvidersTable: record.showProvidersTable !== false,
     showProjectsTable: record.showProjectsTable !== false,
     showLiveTps: record.showLiveTps !== false,
+    liveTpsSize: normalizeLiveTpsSize(record.liveTpsSize),
     // Missing (legacy settings.json) means the legacy hour/day/week/month layout.
     visibleCards: active,
     inactiveCards: inactive,
@@ -238,6 +245,7 @@ export async function saveDashboardSettings(settings: DashboardSettings, cacheDi
       showProvidersTable: settings.showProvidersTable !== false,
       showProjectsTable: settings.showProjectsTable !== false,
       showLiveTps: settings.showLiveTps !== false,
+      liveTpsSize: normalizeLiveTpsSize(settings.liveTpsSize),
       visibleCards: active,
       inactiveCards: normalizeVisibleCards(settings.inactiveCards, active.length > 4 ? 4 : 6),
     },

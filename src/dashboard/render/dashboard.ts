@@ -48,6 +48,7 @@ import {
   type DashboardRenderOptions,
   type DashboardSnapshotInput,
   type DashboardWindow,
+  type LiveTpsSize,
   type LiveTpsView,
 } from "./types.js";
 import { ALL_PROVIDER_KINDS, SETTINGS_ROWS } from "../settings/index.js";
@@ -407,6 +408,22 @@ const LIVE_TPS_GLYPHS: Readonly<Record<string, readonly string[]>> = {
   ".": ["000", "000", "000", "000", "000", "010"],
 };
 
+// 5-row full-block glyphs for the tallest TPS size.
+// 5-row full-block glyphs for the tallest TPS size.
+const LIVE_TPS_GLYPHS_5: Readonly<Record<string, readonly string[]>> = {
+  "0": ["███", "█ █", "█ █", "█ █", "███"],
+  "1": [" █ ", "██ ", " █ ", " █ ", "███"],
+  "2": ["███", "  █", "███", "█  ", "███"],
+  "3": ["███", "  █", "███", "  █", "███"],
+  "4": ["█ █", "█ █", "███", "  █", "  █"],
+  "5": ["███", "█  ", "███", "  █", "███"],
+  "6": ["███", "█  ", "███", "█ █", "███"],
+  "7": ["███", "  █", "  █", "  █", "  █"],
+  "8": ["███", "█ █", "███", "█ █", "███"],
+  "9": ["███", "█ █", "███", "  █", "███"],
+  ".": ["   ", "   ", "   ", "   ", " █ "],
+};
+
 function glyphRow(character: string, row: number): string {
   const glyph = LIVE_TPS_GLYPHS[character];
   if (glyph === undefined) return "   ";
@@ -425,47 +442,81 @@ function centerText(value: string, width: number): string {
   return " ".repeat(Math.floor((width - visible) / 2)) + value;
 }
 
+function padRows(rows: ReadonlyArray<string>, count: number): string[] {
+  const top = Math.max(0, Math.floor((count - rows.length) / 2));
+  return Array.from({ length: count }, (_, index) => rows[index - top] ?? "");
+}
+
+function blockMeter(
+  value: string,
+  label: string,
+  rows: 3 | 5,
+  color: boolean,
+  width: number,
+  rateColor: string,
+  active: boolean,
+): string[] | undefined {
+  const digitRows = Array.from({ length: rows }, (_, row) =>
+    [...value]
+      .map((character) => (rows === 3 ? glyphRow(character, row) : (LIVE_TPS_GLYPHS_5[character]?.[row] ?? "   ")))
+      .join(" "),
+  );
+  const combinedWidth = lineWidth(digitRows[0]!) + 2 + [...label].length;
+  if (width < 40 || combinedWidth > width) return undefined;
+  const labelColored = active ? themePurple(label, color) : paint(label, ANSI.purpleDim, color);
+  const prefix = " ".repeat(Math.max(0, Math.floor((width - combinedWidth) / 2)));
+  const middle = Math.floor(rows / 2);
+  return digitRows.map(
+    (row, index) => prefix + paint(row, rateColor, color) + (index === middle ? "  " + labelColored : ""),
+  );
+}
+
 /**
  * Aggregate live TPS banner shown between the cards and the trend panel.
- * It always reserves exactly three rows: active, idle, and unavailable all
- * render the same height, so content below never jumps. Narrow terminals get
- * a one-line fallback instead of block digits.
+ * Every state (active, idle, unavailable) renders exactly the requested
+ * number of rows, so content below never jumps. Narrow terminals fall back to
+ * the compact line padded to the same height.
  */
-export function renderLiveTps(live: LiveTpsView, color: boolean, width: number): string[] {
+export function renderLiveTps(live: LiveTpsView, color: boolean, width: number, size: LiveTpsSize = 3): string[] {
   const safeWidth = Math.max(1, width);
   const active = live.available !== false && Number.isFinite(live.tps) && live.tps > 0;
   const tps = active ? live.tps : 0;
   const value = active ? tps.toFixed(1) : "0.0";
-  const label = live.available === false
-    ? "EST. LIVE TPS · n/a"
-    : active
-      ? `EST. LIVE TPS · ${live.activeSessions} ACTIVE`
-      : "EST. LIVE TPS · idle";
+  const state = live.available === false ? "n/a" : "idle";
+  const label = active ? `EST. LIVE TPS · ${live.activeSessions} ACTIVE` : `EST. LIVE TPS · ${state}`;
+  const average = live.averageTps ?? 0;
   const rateColor = active
-    ? tps > 50 ? ANSI.green : tps >= 10 ? ANSI.orange : ANSI.red
+    ? average > 0
+      ? tps >= average * 1.25
+        ? ANSI.green
+        : tps >= average * 0.75
+          ? ANSI.orange
+          : ANSI.red
+      : tps > 50
+        ? ANSI.green
+        : tps >= 10
+          ? ANSI.orange
+          : ANSI.red
     : ANSI.purpleDim;
-  const digitRows = Array.from({ length: 3 }, (_, row) =>
-    [...value].map((character) => glyphRow(character, row)).join(" "),
-  );
-  const blockWidth = lineWidth(digitRows[0]!);
-  const combinedWidth = blockWidth + 2 + [...label].length;
-  // 40 columns is the minimum that reads well; narrower terminals get the
-  // compact line so the banner never crowds the dashboard.
-  if (combinedWidth > safeWidth || safeWidth < 40) {
-    const fallback = active
-      ? `EST. LIVE TPS ${value} · ${live.activeSessions} ACTIVE`
-      : `EST. LIVE TPS 0.0 · ${live.available === false ? "n/a" : "idle"}`;
-    return [centerText(paint(fallback, rateColor, color), safeWidth)];
+  const compact = active ? `EST. LIVE TPS ${value} · ${live.activeSessions} ACTIVE` : `EST. LIVE TPS 0.0 · ${state}`;
+
+  if (size === 1) return [centerText(paint(compact, rateColor, color), safeWidth)];
+  if (size === 2) {
+    return [
+      centerText(
+        active ? themePurple("EST. LIVE TPS", color) : paint("EST. LIVE TPS", ANSI.purpleDim, color),
+        safeWidth,
+      ),
+      centerText(
+        paint(active ? `${value} · ${live.activeSessions} ACTIVE` : `0.0 · ${state}`, rateColor, color),
+        safeWidth,
+      ),
+    ];
   }
 
-  const labelColored = active ? themePurple(label, color) : paint(label, ANSI.purpleDim, color);
-  const leftPad = Math.max(0, Math.floor((safeWidth - combinedWidth) / 2));
-  const prefix = " ".repeat(leftPad);
-  return [
-    prefix + paint(digitRows[0]!, rateColor, color),
-    prefix + paint(digitRows[1]!, rateColor, color) + "  " + labelColored,
-    prefix + paint(digitRows[2]!, rateColor, color),
-  ];
+  const block = blockMeter(value, label, size, color, safeWidth, rateColor, active);
+  if (block !== undefined) return block;
+  return padRows([centerText(paint(compact, rateColor, color), safeWidth)], size);
 }
 
 function renderTrend(
@@ -813,6 +864,17 @@ function renderSettingsPanel(
     const full = focused ? `${lineContent}${themeOrange(suffix, color)}` : lineContent;
     lines.push(padPrefix + `│${pad(full, inner)}│`);
   }
+
+  const sizeFocused = settings.focusedIndex === SETTINGS_ROWS.liveTpsSize;
+  const sizeValue = settings.liveTpsSize ?? 3;
+  const sizePrefix = sizeFocused ? themeOrange("▶ ", color, true) : "  ";
+  const sizeSuffix = sizeFocused ? "  ← cycle" : "";
+  const sizeAvail = Math.max(4, inner - 4 - (sizeFocused ? 10 : 0));
+  const sizeLabel = `TPS size: ${sizeValue} line${sizeValue === 1 ? "" : "s"}`;
+  const sizeContent = `${sizePrefix}${themeWhite(truncate(sizeLabel, sizeAvail), color, true)}`;
+  lines.push(
+    padPrefix + `│${pad(sizeFocused ? `${sizeContent}${themeOrange(sizeSuffix, color)}` : sizeContent, inner)}│`,
+  );
 
   lines.push(padPrefix + `│${" ".repeat(inner)}│`);
 
@@ -1259,7 +1321,8 @@ export function renderDashboard(
   }
 
   if (options.liveTps !== undefined && options.settings?.showLiveTps !== false) {
-    lines.push(...renderLiveTps(options.liveTps, color, width));
+    lines.push("");
+    lines.push(...renderLiveTps(options.liveTps, color, width, options.settings?.liveTpsSize ?? 3));
   }
 
   lines.push("");

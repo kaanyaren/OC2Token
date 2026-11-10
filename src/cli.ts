@@ -14,6 +14,8 @@ import {
   getCardHitRegions,
   GITHUB_URL,
   normalizeVisibleCards,
+  nextLiveTpsSize,
+  normalizeLiveTpsSize,
   REFRESH_PRESETS,
   renderDashboard,
   renderJSON,
@@ -21,6 +23,7 @@ import {
   stripAnsi,
   type DashboardCardKind,
   type DashboardSnapshotInput,
+  type LiveTpsSize,
 } from "./output/index.js";
 import {
   createApplicationSource,
@@ -507,6 +510,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     showProvidersTable: boolean;
     showProjectsTable: boolean;
     showLiveTps: boolean;
+    liveTpsSize: LiveTpsSize;
     visibleCards: DashboardCardKind[];
     /** Opposite-size set remembered across count toggles. */
     inactiveCards: DashboardCardKind[];
@@ -518,6 +522,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     showProvidersTable: persisted?.showProvidersTable !== false,
     showProjectsTable: persisted?.showProjectsTable !== false,
     showLiveTps: persisted?.showLiveTps !== false,
+    liveTpsSize: normalizeLiveTpsSize(persisted?.liveTpsSize),
     visibleCards: normalizeVisibleCards(persisted?.visibleCards),
     inactiveCards: normalizeVisibleCards(
       persisted?.inactiveCards,
@@ -541,6 +546,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
       showProvidersTable: settingsState.showProvidersTable,
       showProjectsTable: settingsState.showProjectsTable,
       showLiveTps: settingsState.showLiveTps,
+      liveTpsSize: settingsState.liveTpsSize,
       visibleCards: [...settingsState.visibleCards],
       inactiveCards: [...settingsState.inactiveCards],
     }, options.cacheDirectory);
@@ -591,6 +597,13 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     settingsState.showLiveTps = !settingsState.showLiveTps;
     if (settingsState.showLiveTps) liveTps.start();
     else liveTps.stop();
+    persistCurrentSettings();
+    draw();
+  };
+
+  /** Cycle the live TPS banner through 1, 2, 3, and 5 rows. */
+  const cycleLiveTpsSize = (): void => {
+    settingsState.liveTpsSize = nextLiveTpsSize(settingsState.liveTpsSize);
     persistCurrentSettings();
     draw();
   };
@@ -661,6 +674,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         showProvidersTable: settingsState.showProvidersTable,
         showProjectsTable: settingsState.showProjectsTable,
         showLiveTps: settingsState.showLiveTps,
+        liveTpsSize: settingsState.liveTpsSize,
         visibleCards: [...settingsState.visibleCards],
         inactiveCards: [...settingsState.inactiveCards],
         focusedIndex: settingsState.focusedIndex,
@@ -761,6 +775,11 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
         if (hasBox && line.includes("Live TPS")) {
           settingsState.focusedIndex = SETTINGS_ROWS.tables + 2;
           toggleLiveTps();
+          return;
+        }
+        if (line.includes("TPS size:")) {
+          settingsState.focusedIndex = SETTINGS_ROWS.liveTpsSize;
+          cycleLiveTpsSize();
           return;
         }
         const cardSlot = line.match(/Card ([1-6]):/);
@@ -1173,6 +1192,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
               draw();
             } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables + 2) {
               toggleLiveTps();
+            } else if (settingsState.focusedIndex === SETTINGS_ROWS.liveTpsSize) {
+              cycleLiveTpsSize();
             } else if (
               settingsState.focusedIndex >= SETTINGS_ROWS.cards &&
               settingsState.focusedIndex < SETTINGS_ROWS.cards + 6
@@ -1280,6 +1301,8 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
             draw();
           } else if (settingsState.focusedIndex === SETTINGS_ROWS.tables + 2) {
             toggleLiveTps();
+          } else if (settingsState.focusedIndex === SETTINGS_ROWS.liveTpsSize) {
+            cycleLiveTpsSize();
           }
           i += 1;
           continue;
@@ -1361,7 +1384,7 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     const state = coordinator.getState();
     const second = Math.floor(clock.monotonicNow() / 1000);
     const live = liveTps.snapshot();
-    const tpsKey = `${live.available}:${live.activeSessions}:${live.tps.toFixed(1)}`;
+    const tpsKey = `${live.available}:${live.activeSessions}:${live.tps.toFixed(1)}:${live.averageTps.toFixed(1)}`;
     const active = state.status === "refreshing";
     if (active || second !== lastHeartbeatSecond || tpsKey !== lastTpsKey) {
       lastHeartbeatSecond = second;
