@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { TpsAggregator, type LiveTpsEvent } from "../../src/opencode/live.js";
+import {
+  TpsAggregator,
+  createCompositeLiveTpsMeter,
+  type LiveTpsEvent,
+  type LiveTpsMeter,
+} from "../../src/opencode/live.js";
 
 const NOW = 1_000_000;
 
@@ -91,4 +96,38 @@ test("ignores malformed events", () => {
   });
 
   assert.deepEqual(aggregator.snapshot(NOW), { tps: 0, activeSessions: 0 });
+});
+
+test("createCompositeLiveTpsMeter sums available meters and ignores unavailable ones", () => {
+  const meterA: LiveTpsMeter = {
+    start() {},
+    stop() {},
+    snapshot: () => ({ available: true, tps: 40, activeSessions: 1, averageTps: 12 }),
+  };
+  const meterB: LiveTpsMeter = {
+    start() {},
+    stop() {},
+    snapshot: () => ({ available: true, tps: 60, activeSessions: 2, averageTps: 18 }),
+  };
+  const unavailable: LiveTpsMeter = {
+    start() {},
+    stop() {},
+    snapshot: () => ({ available: false, tps: 99, activeSessions: 9, averageTps: 99 }),
+  };
+
+  const composite = createCompositeLiveTpsMeter([meterA, meterB, unavailable]);
+  assert.deepEqual(composite.snapshot(NOW), {
+    available: true,
+    tps: 100,
+    activeSessions: 3,
+    averageTps: 30,
+  });
+
+  const allUnavailable = createCompositeLiveTpsMeter([unavailable]);
+  assert.deepEqual(allUnavailable.snapshot(NOW), {
+    available: false,
+    tps: 0,
+    activeSessions: 0,
+    averageTps: 0,
+  });
 });

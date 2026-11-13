@@ -299,3 +299,32 @@ export function createLiveTpsMeter(options: LiveTpsMeterOptions = {}): LiveTpsMe
     },
   };
 }
+
+/** Combine multiple live TPS meters into a single aggregate reading. */
+export function createCompositeLiveTpsMeter(meters: ReadonlyArray<LiveTpsMeter>): LiveTpsMeter {
+  return {
+    start(): void {
+      for (const meter of meters) meter.start();
+    },
+    stop(): void {
+      for (const meter of meters) meter.stop();
+    },
+    snapshot(now = Date.now()): LiveTpsSnapshot {
+      let available = false;
+      let tps = 0;
+      let activeSessions = 0;
+      let averageTps = 0;
+
+      for (const meter of meters) {
+        const reading = meter.snapshot(now);
+        if (!reading.available) continue;
+        available = true;
+        tps += reading.tps;
+        activeSessions += reading.activeSessions;
+        averageTps += reading.averageTps;
+      }
+
+      return { available, tps, activeSessions, averageTps };
+    },
+  };
+}

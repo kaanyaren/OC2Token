@@ -39,7 +39,8 @@ import {
   type ProviderKind,
   type UsageWindowKind,
 } from "./domain/index.js";
-import { createLiveTpsMeter, runOpenCodeDoctor } from "./opencode/index.js";
+import { createCompositeLiveTpsMeter, createLiveTpsMeter, runOpenCodeDoctor } from "./opencode/index.js";
+import { createAntigravityLiveTpsMeter } from "./antigravity/index.js";
 import { runCodexDoctor } from "./codex/doctor.js";
 import { runAntigravityDoctor } from "./antigravity/doctor.js";
 import { runPiDoctor } from "./pi/doctor.js";
@@ -477,7 +478,10 @@ async function runDashboard(options: CliOptions, io: CliIO): Promise<number> {
     monotonicNow: () => Number(process.hrtime.bigint()) / 1_000_000,
   };
   const fallback = emptyCollectionResult(clock.wallNow(), options.timezone);
-  const liveTps = createLiveTpsMeter();
+  const liveTps = createCompositeLiveTpsMeter([
+    createLiveTpsMeter(),
+    createAntigravityLiveTpsMeter(),
+  ]);
   const coordinator = new RefreshCoordinator({
     source: adapterSource.source,
     clock,
